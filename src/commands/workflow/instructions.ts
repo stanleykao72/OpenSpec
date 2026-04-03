@@ -22,6 +22,10 @@ import {
   type ApplyInstructions,
 } from './shared.js';
 import { getChangesDir } from '../../utils/change-utils.js';
+import { buildTaskGroups, enrichGroupsWithDomains, resolveOrchestration } from '../../core/orchestration/index.js';
+import type { OrchestrationHints } from '../../core/orchestration/types.js';
+import { loadPlugins } from '../../core/plugin/loader.js';
+import { readProjectConfig } from '../../core/project-config.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -37,6 +41,7 @@ export interface ApplyInstructionsOptions {
   change?: string;
   schema?: string;
   json?: boolean;
+  orchestrationMode?: 'subagents' | 'teams';
 }
 
 // -----------------------------------------------------------------------------
@@ -247,7 +252,8 @@ function parseTasksFile(content: string): TaskItem[] {
 export async function generateApplyInstructions(
   projectRoot: string,
   changeName: string,
-  schemaName?: string
+  schemaName?: string,
+  orchestrationMode?: 'subagents' | 'teams'
 ): Promise<ApplyInstructions> {
   // loadChangeContext will auto-detect schema from metadata if not provided
   const context = loadChangeContext(projectRoot, changeName, schemaName);
@@ -331,6 +337,61 @@ export async function generateApplyInstructions(
     instruction = schemaInstruction?.trim() ?? 'Read context files, work through pending tasks, mark complete as you go.\nPause if you hit blockers or need clarification.';
   }
 
+  // Build orchestration hints
+  let orchestration: OrchestrationHints | undefined;
+  if (tracksFile && tracksFileExists) {
+    const tasksContent = await fs.promises.readFile(path.join(changeDir, tracksFile), 'utf-8');
+    const taskGroups = buildTaskGroups(tasksContent);
+    enrichGroupsWithDomains(taskGroups, tasksContent);
+
+    // Load plugins for gate/hook orchestration resolution
+    let plugins: import('../../core/plugin/types.js').LoadedPlugin[] = [];
+    try {
+      const config = readProjectConfig(projectRoot);
+      if (config?.plugins && config.plugins.length > 0) {
+        plugins = loadPlugins(projectRoot, config.plugins);
+      }
+    } catch {
+      // Continue without plugins
+    }
+
+    // Resolve gate orchestration from plugins + schema
+    const schemaOrch = applyConfig?.orchestration;
+    const resolvedGates = resolveOrchestration(
+      plugins,
+      schemaOrch?.parallel_groups,
+      'gates'
+    );
+    const resolvedHooks = resolveOrchestration(
+      plugins,
+      undefined,
+      'hooks'
+    );
+
+    const allWarnings = [...resolvedGates.warnings, ...resolvedHooks.warnings];
+
+    const mode = orchestrationMode ?? null;
+    const modeFrom = orchestrationMode ? 'user_flag' as const : 'default' as const;
+    const groupsFrom = schemaOrch?.parallel_groups
+      ? 'schema' as const
+      : resolvedGates.groups.length > 0
+        ? 'plugin' as const
+        : 'default' as const;
+
+    orchestration = {
+      mode,
+      source: { mode_from: modeFrom, groups_from: groupsFrom },
+      task_groups: taskGroups,
+      gate_groups: resolvedGates.groups.length > 0
+        ? [{ phase: 'post' as const, groups: resolvedGates.groups }]
+        : [],
+      hook_groups: resolvedHooks.groups.length > 0
+        ? [{ hook_point: 'apply.post', groups: resolvedHooks.groups }]
+        : [],
+      warnings: allWarnings,
+    };
+  }
+
   return {
     changeName,
     changeDir,
@@ -343,6 +404,7 @@ export async function generateApplyInstructions(
     instruction,
     gates,
     steps,
+    orchestration,
   };
 }
 
@@ -359,7 +421,12 @@ export async function applyInstructionsCommand(options: ApplyInstructionsOptions
     }
 
     // generateApplyInstructions uses loadChangeContext which auto-detects schema
-    const instructions = await generateApplyInstructions(projectRoot, changeName, options.schema);
+    const instructions = await generateApplyInstructions(
+      projectRoot,
+      changeName,
+      options.schema,
+      options.orchestrationMode
+    );
 
     spinner?.stop();
 
