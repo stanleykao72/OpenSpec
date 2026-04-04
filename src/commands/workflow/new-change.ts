@@ -8,6 +8,7 @@ import ora from 'ora';
 import path from 'path';
 import { createChange, validateChangeName, getChangesDir } from '../../utils/change-utils.js';
 import { validateSchemaExists } from './shared.js';
+import { VALID_CHANGE_CLASSES, type ChangeClass } from '../../core/artifact-graph/types.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -16,6 +17,7 @@ import { validateSchemaExists } from './shared.js';
 export interface NewChangeOptions {
   description?: string;
   schema?: string;
+  class?: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -39,11 +41,23 @@ export async function newChangeCommand(name: string | undefined, options: NewCha
     validateSchemaExists(options.schema, projectRoot);
   }
 
+  // Validate class if provided
+  let changeClass: ChangeClass | undefined;
+  if (options.class) {
+    if (!VALID_CHANGE_CLASSES.includes(options.class as ChangeClass)) {
+      throw new Error(
+        `Invalid change class '${options.class}'. Must be one of: ${VALID_CHANGE_CLASSES.join(', ')}`
+      );
+    }
+    changeClass = options.class as ChangeClass;
+  }
+
   const schemaDisplay = options.schema ? ` with schema '${options.schema}'` : '';
-  const spinner = ora(`Creating change '${name}'${schemaDisplay}...`).start();
+  const classDisplay = changeClass ? ` [${changeClass}]` : '';
+  const spinner = ora(`Creating change '${name}'${schemaDisplay}${classDisplay}...`).start();
 
   try {
-    const result = await createChange(projectRoot, name, { schema: options.schema });
+    const result = await createChange(projectRoot, name, { schema: options.schema, changeClass });
 
     // If description provided, create README.md with description
     if (options.description) {
