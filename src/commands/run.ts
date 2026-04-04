@@ -9,7 +9,6 @@
  *   openspec run complete --change <name> --phase <phase> [--json]
  */
 
-import ora from 'ora';
 import path from 'path';
 import {
   loadChangeContext,
@@ -22,6 +21,8 @@ import { readProjectConfig } from '../core/project-config.js';
 import { loadPlugins } from '../core/plugin/loader.js';
 import { validateAllPluginConfigs } from '../core/plugin/config-validator.js';
 import type { LoadedPlugin } from '../core/plugin/types.js';
+import { VALID_CHANGE_CLASSES, type ChangeClass } from '../core/artifact-graph/types.js';
+import { loadWaiver, validateWaiver } from '../core/waiver.js';
 
 export class RunCommand {
   async startAction(options: {
@@ -83,6 +84,7 @@ export class RunCommand {
     change?: string;
     phase?: string;
     json?: boolean;
+    gateProfile?: string;
   }): Promise<void> {
     const projectRoot = process.cwd();
 
@@ -97,17 +99,43 @@ export class RunCommand {
       );
     }
 
-    // 3. Load change context to get schema name
+    // 3. Validate gate-profile if provided
+    let gateProfileOverride: ChangeClass | undefined;
+    if (options.gateProfile) {
+      if (!VALID_CHANGE_CLASSES.includes(options.gateProfile as ChangeClass)) {
+        throw new Error(
+          `Invalid --gate-profile '${options.gateProfile}'. Must be one of: ${VALID_CHANGE_CLASSES.join(', ')}`,
+        );
+      }
+      gateProfileOverride = options.gateProfile as ChangeClass;
+
+      // If hotfix profile, require a valid waiver file
+      if (gateProfileOverride === 'hotfix') {
+        const changeDir = path.join(getChangesDir(projectRoot), changeName);
+        const waiver = loadWaiver(changeDir);
+        if (!waiver) {
+          throw new Error(
+            'Waiver file required for hotfix profile. Create .waiver.yaml in the change directory with: reason, approver, expiry, ticket',
+          );
+        }
+        const validation = validateWaiver(waiver);
+        if (!validation.valid) {
+          throw new Error(`Waiver validation failed: ${validation.error}`);
+        }
+      }
+    }
+
+    // 4. Load change context to get schema name
     const context = loadChangeContext(projectRoot, changeName);
     const changeDir = path.join(getChangesDir(projectRoot), changeName);
 
-    // 4. Resolve schema
+    // 5. Resolve schema
     const schema = resolveSchema(context.schemaName, projectRoot);
 
-    // 5. Load plugins
+    // 6. Load plugins
     const plugins = this.loadProjectPlugins(projectRoot);
 
-    // 6. Create PipelineRunner
+    // 7. Create PipelineRunner
     const runner = new PipelineRunner(
       projectRoot,
       changeName,
@@ -115,9 +143,11 @@ export class RunCommand {
       plugins,
       changeDir,
       schema,
+      undefined,
+      gateProfileOverride,
     );
 
-    // 7. Execute complete
+    // 8. Execute complete
     const result = await runner.complete();
 
     // 8. Output

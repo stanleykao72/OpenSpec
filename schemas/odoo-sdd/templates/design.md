@@ -13,6 +13,8 @@
 ## Decisions
 
 <!-- Key design decisions and rationale -->
+<!-- Each Decision should include a **Covers**: annotation listing which capabilities it addresses -->
+<!-- Example: **Covers**: `user-auth`, `data-export` -->
 
 ## Risks / Trade-offs
 

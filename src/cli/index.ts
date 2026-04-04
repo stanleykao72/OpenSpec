@@ -534,6 +534,7 @@ newCmd
   .description('Create a new change directory')
   .option('--description <text>', 'Description to add to README.md')
   .option('--schema <name>', `Workflow schema to use (default: ${DEFAULT_SCHEMA})`)
+  .option('--class <class>', 'Change class for gate profile routing: feature, single-cap, infra, hotfix (default: feature)')
   .action(async (name: string, options: NewChangeOptions) => {
     try {
       await newChangeCommand(name, options);
@@ -609,11 +610,53 @@ runCmd
   .description('Complete a pipeline phase: execute post-gates and post-hooks')
   .option('--change <name>', 'Change name')
   .option('--phase <phase>', 'Phase: propose, apply, verify, or archive')
+  .option('--gate-profile <profile>', 'Override gate profile: feature, single-cap, infra, hotfix')
   .option('--json', 'Output as JSON')
-  .action(async (options: { change?: string; phase?: string; json?: boolean }) => {
+  .action(async (options: { change?: string; phase?: string; gateProfile?: string; json?: boolean }) => {
     try {
       const runCommand = new RunCommand();
       await runCommand.completeAction(options);
+    } catch (error) {
+      console.log();
+      ora().fail(`Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// Waiver command group
+const waiverCmd = program.command('waiver').description('Manage gate waivers');
+
+waiverCmd
+  .command('list')
+  .description('List all active waivers across changes')
+  .option('--json', 'Output as JSON')
+  .option('--all', 'Include expired waivers')
+  .action(async (options: { json?: boolean; all?: boolean }) => {
+    try {
+      const { listWaivers } = await import('../core/waiver.js');
+      const { getChangesDir } = await import('../utils/change-utils.js');
+      const changesDir = getChangesDir(process.cwd());
+      const waivers = listWaivers(changesDir);
+      const filtered = options.all ? waivers : waivers.filter((w) => !w.expired);
+
+      if (options.json) {
+        console.log(JSON.stringify(filtered, null, 2));
+      } else {
+        if (filtered.length === 0) {
+          console.log('No active waivers found.');
+        } else {
+          console.log('Active waivers:\n');
+          for (const entry of filtered) {
+            const status = entry.expired ? ' [EXPIRED]' : '';
+            console.log(`  ${entry.changeName}${status}`);
+            console.log(`    Reason:   ${entry.waiver.reason}`);
+            console.log(`    Approver: ${entry.waiver.approver}`);
+            console.log(`    Expiry:   ${entry.waiver.expiry}`);
+            console.log(`    Ticket:   ${entry.waiver.ticket}`);
+            console.log();
+          }
+        }
+      }
     } catch (error) {
       console.log();
       ora().fail(`Error: ${(error as Error).message}`);
