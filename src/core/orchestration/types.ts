@@ -42,7 +42,7 @@ export interface ParallelGroup {
   /** Whether this group runs in parallel. */
   parallel: boolean;
   /** Suggested orchestration mode. */
-  mode?: 'default' | 'subagents' | 'teams';
+  mode?: 'default' | 'subagents' | 'teams' | 'sequential';
   /** Synthesis strategy for combining results. */
   synthesis?: 'require-both-pass' | 'any-pass' | 'majority';
   /** Where this decision came from. */
@@ -60,7 +60,7 @@ export interface OrchestrationSource {
 /** Complete orchestration hints included in instructions JSON output. */
 export interface OrchestrationHints {
   /** User-selected mode, or null if not specified. */
-  mode: 'default' | 'subagents' | 'teams' | null;
+  mode: 'default' | 'subagents' | 'teams' | 'sequential' | null;
   /** Source tracking. */
   source: OrchestrationSource;
   /** Task parallel groups with domain mapping. */

@@ -470,19 +470,22 @@ program
   .option('--change <id>', 'Change name')
   .option('--schema <name>', 'Schema override (auto-detected from config.yaml)')
   .option('--json', 'Output as JSON')
-  .option('--subagents', 'Use subagent orchestration mode (mutually exclusive with --teams)')
-  .option('--teams', 'Use team orchestration mode (mutually exclusive with --subagents)')
-  .action(async (artifactId: string | undefined, options: InstructionsOptions & { subagents?: boolean; teams?: boolean }) => {
+  .option('--subagents', 'Use subagent orchestration mode (mutually exclusive with --teams and --sequential)')
+  .option('--teams', 'Use team orchestration mode (mutually exclusive with --subagents and --sequential)')
+  .option('--sequential', 'Use sequential orchestration mode (mutually exclusive with --teams and --subagents)')
+  .action(async (artifactId: string | undefined, options: InstructionsOptions & { subagents?: boolean; teams?: boolean; sequential?: boolean }) => {
     try {
       // Validate mutually exclusive flags
-      if (options.subagents && options.teams) {
-        throw new Error('--subagents and --teams are mutually exclusive. Use one or the other.');
+      const modeFlags = [options.subagents, options.teams, options.sequential].filter(Boolean).length;
+      if (modeFlags > 1) {
+        throw new Error('--subagents, --teams, and --sequential are mutually exclusive. Use only one.');
       }
 
       // Special case: "apply" is not an artifact, but a command to get apply instructions
       if (artifactId === 'apply') {
         const orchestrationMode = options.subagents ? 'subagents' as const
           : options.teams ? 'teams' as const
+          : options.sequential ? 'sequential' as const
           : undefined;
         await applyInstructionsCommand({ change: options.change, schema: options.schema, json: options.json, orchestrationMode });
       } else {

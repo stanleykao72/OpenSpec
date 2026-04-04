@@ -43,7 +43,7 @@ export interface ApplyInstructionsOptions {
   change?: string;
   schema?: string;
   json?: boolean;
-  orchestrationMode?: 'subagents' | 'teams';
+  orchestrationMode?: 'subagents' | 'teams' | 'sequential';
 }
 
 // -----------------------------------------------------------------------------
@@ -277,7 +277,7 @@ export async function generateApplyInstructions(
   projectRoot: string,
   changeName: string,
   schemaName?: string,
-  orchestrationMode?: 'subagents' | 'teams'
+  orchestrationMode?: 'subagents' | 'teams' | 'sequential'
 ): Promise<ApplyInstructions> {
   // loadChangeContext will auto-detect schema from metadata if not provided
   const context = loadChangeContext(projectRoot, changeName, schemaName);
@@ -394,8 +394,16 @@ export async function generateApplyInstructions(
 
     const allWarnings = [...resolvedGates.warnings, ...resolvedHooks.warnings];
 
-    const mode = orchestrationMode ?? null;
-    const modeFrom = orchestrationMode ? 'user_flag' as const : 'default' as const;
+    // Read schema default_mode
+    const schemaDefaultMode = applyConfig?.orchestration?.default_mode ?? null;
+
+    // Priority: user flag > schema default > null
+    const mode = orchestrationMode ?? schemaDefaultMode;
+    const modeFrom = orchestrationMode
+      ? 'user_flag' as const
+      : schemaDefaultMode
+        ? 'schema' as const
+        : 'default' as const;
     const groupsFrom = schemaOrch?.parallel_groups
       ? 'schema' as const
       : resolvedGates.groups.length > 0
