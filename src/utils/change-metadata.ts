@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as yaml from 'yaml';
 import { ChangeMetadataSchema, type ChangeMetadata } from '../core/artifact-graph/types.js';
 import { listSchemas } from '../core/artifact-graph/resolver.js';
+import { getLoadedPlugins } from '../core/plugin/context.js';
 import { readProjectConfig } from '../core/project-config.js';
 
 const METADATA_FILENAME = '.openspec.yaml';
@@ -33,7 +34,8 @@ export function validateSchemaName(
   schemaName: string,
   projectRoot?: string
 ): string {
-  const availableSchemas = listSchemas(projectRoot);
+  const loadedPlugins = projectRoot ? getLoadedPlugins(projectRoot) : undefined;
+  const availableSchemas = listSchemas(projectRoot, loadedPlugins);
   if (!availableSchemas.includes(schemaName)) {
     throw new Error(
       `Unknown schema '${schemaName}'. Available: ${availableSchemas.join(', ')}`
@@ -134,8 +136,9 @@ export function readChangeMetadata(
     );
   }
 
-  // Validate that the schema exists
-  const availableSchemas = listSchemas(projectRoot);
+  // Validate that the schema exists (including plugin-provided schemas)
+  const loadedPlugins = projectRoot ? getLoadedPlugins(projectRoot) : undefined;
+  const availableSchemas = listSchemas(projectRoot, loadedPlugins);
   if (!availableSchemas.includes(parseResult.data.schema)) {
     throw new ChangeMetadataError(
       `Unknown schema '${parseResult.data.schema}'. Available: ${availableSchemas.join(', ')}`,
@@ -161,10 +164,11 @@ export function readChangeMetadata(
  */
 export function resolveSchemaForChange(
   changeDir: string,
-  explicitSchema?: string
+  explicitSchema?: string,
+  projectRoot?: string
 ): string {
-  // Derive project root from changeDir (changeDir is typically projectRoot/openspec/changes/change-name)
-  const projectRoot = path.resolve(changeDir, '../../..');
+  // Use provided projectRoot, or derive from changeDir (works when changesDir is under projectRoot)
+  const resolvedProjectRoot = projectRoot ?? path.resolve(changeDir, '../../..');
 
   // 1. Explicit override wins
   if (explicitSchema) {
@@ -173,7 +177,7 @@ export function resolveSchemaForChange(
 
   // 2. Try reading from metadata
   try {
-    const metadata = readChangeMetadata(changeDir, projectRoot);
+    const metadata = readChangeMetadata(changeDir, resolvedProjectRoot);
     if (metadata?.schema) {
       return metadata.schema;
     }
@@ -183,7 +187,7 @@ export function resolveSchemaForChange(
 
   // 3. Try reading from project config
   try {
-    const config = readProjectConfig(projectRoot);
+    const config = readProjectConfig(resolvedProjectRoot);
     if (config?.schema) {
       return config.schema;
     }

@@ -6,6 +6,7 @@
 
 import chalk from 'chalk';
 import { listSchemasWithInfo } from '../../core/artifact-graph/index.js';
+import { getLoadedPlugins } from '../../core/plugin/context.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -21,7 +22,7 @@ export interface SchemasOptions {
 
 export async function schemasCommand(options: SchemasOptions): Promise<void> {
   const projectRoot = process.cwd();
-  const schemas = listSchemasWithInfo(projectRoot);
+  const schemas = listSchemasWithInfo(projectRoot, getLoadedPlugins(projectRoot));
 
   if (options.json) {
     console.log(JSON.stringify(schemas, null, 2));

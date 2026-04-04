@@ -12,11 +12,12 @@ import {
 } from '../core/artifact-graph/resolver.js';
 import { parseSchema, SchemaValidationError } from '../core/artifact-graph/schema.js';
 import type { SchemaYaml, Artifact } from '../core/artifact-graph/types.js';
+import { getLoadedPlugins } from '../core/plugin/context.js';
 
 /**
  * Schema source location type
  */
-type SchemaSource = 'project' | 'user' | 'package';
+type SchemaSource = 'project' | 'plugin' | 'user' | 'package';
 
 /**
  * Result of checking a schema location
@@ -63,6 +64,20 @@ function checkAllLocations(
     path: projectDir,
     exists: fs.existsSync(projectSchemaPath),
   });
+
+  // Plugin locations
+  const loadedPlugins = getLoadedPlugins(projectRoot);
+  for (const plugin of loadedPlugins) {
+    if (plugin.manifest.schemas?.includes(name)) {
+      const pluginSchemaDir = path.join(plugin.dir, 'schemas', name);
+      const pluginSchemaPath = path.join(pluginSchemaDir, 'schema.yaml');
+      locations.push({
+        source: 'plugin',
+        path: pluginSchemaDir,
+        exists: fs.existsSync(pluginSchemaPath),
+      });
+    }
+  }
 
   // User location
   const userDir = path.join(getUserSchemasDir(), name);
@@ -119,7 +134,7 @@ function getSchemaResolution(
 function getAllSchemasWithResolution(
   projectRoot: string
 ): SchemaResolution[] {
-  const schemaNames = listSchemas(projectRoot);
+  const schemaNames = listSchemas(projectRoot, getLoadedPlugins(projectRoot));
   const results: SchemaResolution[] = [];
 
   for (const name of schemaNames) {
@@ -322,6 +337,7 @@ export function registerSchemaCommand(program: Command): void {
             // Group by source
             const bySource = {
               project: schemas.filter((s) => s.source === 'project'),
+              plugin: schemas.filter((s) => s.source === 'plugin'),
               user: schemas.filter((s) => s.source === 'user'),
               package: schemas.filter((s) => s.source === 'package'),
             };
@@ -329,6 +345,16 @@ export function registerSchemaCommand(program: Command): void {
             if (bySource.project.length > 0) {
               console.log('\nProject schemas:');
               for (const schema of bySource.project) {
+                const shadowInfo = schema.shadows.length > 0
+                  ? ` (shadows: ${schema.shadows.map((s) => s.source).join(', ')})`
+                  : '';
+                console.log(`  ${schema.name}${shadowInfo}`);
+              }
+            }
+
+            if (bySource.plugin.length > 0) {
+              console.log('\nPlugin schemas:');
+              for (const schema of bySource.plugin) {
                 const shadowInfo = schema.shadows.length > 0
                   ? ` (shadows: ${schema.shadows.map((s) => s.source).join(', ')})`
                   : '';
@@ -365,7 +391,7 @@ export function registerSchemaCommand(program: Command): void {
         const resolution = getSchemaResolution(name, projectRoot);
 
         if (!resolution) {
-          const available = listSchemas(projectRoot);
+          const available = listSchemas(projectRoot, getLoadedPlugins(projectRoot));
           if (options?.json) {
             console.log(JSON.stringify({
               error: `Schema '${name}' not found`,
@@ -489,10 +515,10 @@ export function registerSchemaCommand(program: Command): void {
         }
 
         // Validate specific schema
-        const schemaDir = getSchemaDir(name, projectRoot);
+        const schemaDir = getSchemaDir(name, projectRoot, getLoadedPlugins(projectRoot));
 
         if (!schemaDir) {
-          const available = listSchemas(projectRoot);
+          const available = listSchemas(projectRoot, getLoadedPlugins(projectRoot));
           if (options?.json) {
             console.log(JSON.stringify({
               valid: false,
@@ -573,9 +599,9 @@ export function registerSchemaCommand(program: Command): void {
         }
 
         // Find source schema
-        const sourceDir = getSchemaDir(source, projectRoot);
+        const sourceDir = getSchemaDir(source, projectRoot, getLoadedPlugins(projectRoot));
         if (!sourceDir) {
-          const available = listSchemas(projectRoot);
+          const available = listSchemas(projectRoot, getLoadedPlugins(projectRoot));
           if (options?.json) {
             console.log(JSON.stringify({
               forked: false,
