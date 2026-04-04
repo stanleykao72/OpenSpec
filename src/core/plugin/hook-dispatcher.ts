@@ -162,7 +162,7 @@ async function executeHandler(
     const { exitCode, stdout, stderr } = await execCommand(
       handler.run!,
       env,
-      context.projectRoot
+      plugin.dir
     );
     const output = [stdout, stderr].filter(Boolean).join('\n');
     return {
@@ -192,7 +192,7 @@ async function executeHandler(
     const { exitCode, stdout, stderr } = await execCommand(
       handler.run!,
       env,
-      context.projectRoot
+      plugin.dir
     );
     const output = [stdout, stderr].filter(Boolean).join('\n');
 
