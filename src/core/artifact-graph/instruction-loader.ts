@@ -179,7 +179,7 @@ export function loadChangeContext(
   const changeDir = path.join(getChangesDir(projectRoot), changeName);
 
   // Resolve schema: explicit > metadata > default
-  const resolvedSchemaName = resolveSchemaForChange(changeDir, schemaName);
+  const resolvedSchemaName = resolveSchemaForChange(changeDir, schemaName, projectRoot);
 
   const schema = resolveSchema(resolvedSchemaName, projectRoot);
   const graph = ArtifactGraph.fromSchema(schema);
