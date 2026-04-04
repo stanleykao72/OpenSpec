@@ -11,6 +11,7 @@ import {
   getSchemaDir,
   ArtifactGraph,
 } from '../../core/artifact-graph/index.js';
+import { getLoadedPlugins } from '../../core/plugin/context.js';
 import { validateSchemaExists, DEFAULT_SCHEMA } from './shared.js';
 
 // -----------------------------------------------------------------------------
@@ -25,7 +26,7 @@ export interface TemplatesOptions {
 export interface TemplateInfo {
   artifactId: string;
   templatePath: string;
-  source: 'project' | 'user' | 'package';
+  source: 'project' | 'plugin' | 'user' | 'package';
 }
 
 // -----------------------------------------------------------------------------
@@ -40,7 +41,7 @@ export async function templatesCommand(options: TemplatesOptions): Promise<void>
     const schemaName = validateSchemaExists(options.schema ?? DEFAULT_SCHEMA, projectRoot);
     const schema = resolveSchema(schemaName, projectRoot);
     const graph = ArtifactGraph.fromSchema(schema);
-    const schemaDir = getSchemaDir(schemaName, projectRoot)!;
+    const schemaDir = getSchemaDir(schemaName, projectRoot, getLoadedPlugins(projectRoot))!;
 
     // Determine the source (project, user, or package)
     const {

@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import path from 'path';
 import * as fs from 'fs';
 import { getSchemaDir, listSchemas } from '../../core/artifact-graph/index.js';
+import { getLoadedPlugins } from '../../core/plugin/context.js';
 import { validateChangeName, getChangesDir } from '../../utils/change-utils.js';
 import type { OrchestrationHints } from '../../core/orchestration/types.js';
 
@@ -187,9 +188,10 @@ export async function validateChangeExists(
  * @param projectRoot - Optional project root for project-local schema resolution
  */
 export function validateSchemaExists(schemaName: string, projectRoot?: string): string {
-  const schemaDir = getSchemaDir(schemaName, projectRoot);
+  const loadedPlugins = projectRoot ? getLoadedPlugins(projectRoot) : undefined;
+  const schemaDir = getSchemaDir(schemaName, projectRoot, loadedPlugins);
   if (!schemaDir) {
-    const availableSchemas = listSchemas(projectRoot);
+    const availableSchemas = listSchemas(projectRoot, loadedPlugins);
     throw new Error(
       `Schema '${schemaName}' not found. Available schemas:\n  ${availableSchemas.join('\n  ')}`
     );

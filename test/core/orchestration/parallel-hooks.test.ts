@@ -37,9 +37,11 @@ describe('parallel hook dispatch', () => {
     hooks: LoadedPlugin['manifest']['hooks'],
     pluginDir?: string
   ): LoadedPlugin {
+    const dir = pluginDir ?? path.join(tempDir, 'plugins', name);
+    fs.mkdirSync(dir, { recursive: true });
     return {
       manifest: { name, version: '1.0.0', hooks },
-      dir: pluginDir ?? path.join(tempDir, 'plugins', name),
+      dir,
       source: 'project',
       config: {},
     };

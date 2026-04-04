@@ -39,13 +39,15 @@ describe('plugin/hook-dispatcher', () => {
     hooks: LoadedPlugin['manifest']['hooks'],
     pluginDir?: string
   ): LoadedPlugin {
+    const dir = pluginDir ?? path.join(tempDir, 'plugins', name);
+    fs.mkdirSync(dir, { recursive: true });
     return {
       manifest: {
         name,
         version: '1.0.0',
         hooks,
       },
-      dir: pluginDir ?? path.join(tempDir, 'plugins', name),
+      dir,
       source: 'project',
       config: {},
     };
@@ -263,6 +265,8 @@ describe('plugin/hook-dispatcher', () => {
     });
 
     it('should set environment variables for commands', async () => {
+      const pluginDir = path.join(tempDir, 'plugins', 'env-plugin');
+      fs.mkdirSync(pluginDir, { recursive: true });
       const plugin: LoadedPlugin = {
         manifest: {
           name: 'env-plugin',
@@ -280,7 +284,7 @@ describe('plugin/hook-dispatcher', () => {
             ],
           },
         },
-        dir: path.join(tempDir, 'plugins', 'env-plugin'),
+        dir: pluginDir,
         source: 'project',
         config: {},
       };
