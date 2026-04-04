@@ -5,6 +5,7 @@ import { ArtifactGraph } from './graph.js';
 import { detectCompleted } from './state.js';
 import { resolveSchemaForChange } from '../../utils/change-metadata.js';
 import { readProjectConfig, validateConfigRules } from '../project-config.js';
+import { getLoadedPlugins } from '../plugin/context.js';
 import { getChangesDir } from '../../utils/change-utils.js';
 import type { Artifact, CompletedSet } from './types.js';
 
@@ -130,7 +131,8 @@ export function loadTemplate(
   templatePath: string,
   projectRoot?: string
 ): string {
-  const schemaDir = getSchemaDir(schemaName, projectRoot);
+  const loadedPlugins = projectRoot ? getLoadedPlugins(projectRoot) : undefined;
+  const schemaDir = getSchemaDir(schemaName, projectRoot, loadedPlugins);
   if (!schemaDir) {
     throw new TemplateLoadError(
       `Schema '${schemaName}' not found`,
