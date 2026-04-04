@@ -4,6 +4,8 @@ import { dispatchHooks, type HookContext, type HookPoint } from '../plugin/hook-
 import { GateChecker, type GateInput, type GateCheckResult } from '../validation/gate-checker.js';
 import type { LoadedPlugin } from '../plugin/types.js';
 import type { SchemaYaml } from '../artifact-graph/types.js';
+import { readChangeMetadata } from '../../utils/change-metadata.js';
+import { VALID_CHANGE_CLASSES, type ChangeClass } from '../artifact-graph/types.js';
 import type {
   RunStartResult,
   RunCompleteResult,
@@ -44,8 +46,39 @@ function getPhaseGates(
   };
 }
 
+/**
+ * Gate profile determines which gate tiers are active.
+ * Tier A = structural, Tier B = traceability, Tier C = semantic.
+ */
+type GateProfile = {
+  tierA: boolean;
+  tierB: boolean;
+  tierC: boolean;
+};
+
+const GATE_PROFILES: Record<ChangeClass, GateProfile> = {
+  feature: { tierA: true, tierB: true, tierC: true },
+  'single-cap': { tierA: true, tierB: true, tierC: false },
+  infra: { tierA: true, tierB: false, tierC: false },
+  hotfix: { tierA: false, tierB: false, tierC: false },
+};
+
+/**
+ * Determines the gate tier from a gate ID.
+ * Convention: gate IDs containing 'structural' or 'lint' → Tier A,
+ * 'traceability' → Tier B, 'semantic' → Tier C.
+ * Unknown gates default to Tier A (always run unless hotfix).
+ */
+function getGateTier(gateId: string): 'A' | 'B' | 'C' {
+  const lower = gateId.toLowerCase();
+  if (lower.includes('semantic') || lower.includes('coherence')) return 'C';
+  if (lower.includes('traceability') || lower.includes('coverage')) return 'B';
+  return 'A';
+}
+
 export class PipelineRunner {
   private sessionId: string;
+  private gateProfileOverride?: ChangeClass;
 
   constructor(
     private projectRoot: string,
@@ -55,11 +88,49 @@ export class PipelineRunner {
     private changeDir: string,
     private schema: SchemaYaml,
     sessionId?: string,
+    gateProfileOverride?: ChangeClass,
   ) {
     if (!VALID_PHASES.includes(phase as Phase)) {
       throw new Error(`Invalid phase: ${phase}. Must be one of: ${VALID_PHASES.join(', ')}`);
     }
     this.sessionId = sessionId ?? generateSessionId();
+    this.gateProfileOverride = gateProfileOverride;
+  }
+
+  /**
+   * Resolves the effective change class for gate filtering.
+   * Priority: CLI override > .openspec.yaml class > default 'feature'.
+   */
+  private resolveChangeClass(): ChangeClass {
+    if (this.gateProfileOverride) {
+      return this.gateProfileOverride;
+    }
+    try {
+      const metadata = readChangeMetadata(this.changeDir, this.projectRoot);
+      if (metadata?.class) {
+        return metadata.class;
+      }
+    } catch {
+      // Fall through to default
+    }
+    return 'feature';
+  }
+
+  /**
+   * Filters gates based on the active gate profile.
+   */
+  private filterGatesByProfile(gates: GateInput[]): GateInput[] {
+    const changeClass = this.resolveChangeClass();
+    const profile = GATE_PROFILES[changeClass];
+
+    return gates.filter((gate) => {
+      const tier = getGateTier(gate.id);
+      switch (tier) {
+        case 'A': return profile.tierA;
+        case 'B': return profile.tierB;
+        case 'C': return profile.tierC;
+      }
+    });
   }
 
   async start(): Promise<RunStartResult> {
@@ -99,8 +170,9 @@ export class PipelineRunner {
       hookContext,
     );
 
-    // 5. Run pre-gates
-    const { pre: preGateInputs } = getPhaseGates(this.schema, this.phase as Phase);
+    // 5. Run pre-gates (filtered by change class gate profile)
+    const { pre: preGateInputsAll } = getPhaseGates(this.schema, this.phase as Phase);
+    const preGateInputs = this.filterGatesByProfile(preGateInputsAll);
     const gateChecker = new GateChecker(this.plugins);
     const preGateResults: GateCheckResult[] = [];
 
@@ -191,11 +263,12 @@ export class PipelineRunner {
       };
     }
 
-    // 2. Run post-gates
+    // 2. Run post-gates (filtered by change class gate profile)
+    const postGateInputsFiltered = this.filterGatesByProfile(postGateInputs);
     const gateChecker = new GateChecker(this.plugins);
     const postGateResults: GateCheckResult[] = [];
 
-    for (const gate of postGateInputs) {
+    for (const gate of postGateInputsFiltered) {
       const result = await gateChecker.checkGate(gate, this.changeDir);
       postGateResults.push(result);
     }
@@ -217,7 +290,7 @@ export class PipelineRunner {
     );
 
     // 4. Check for blocking failures
-    const failedBlockingGates = postGateInputs
+    const failedBlockingGates = postGateInputsFiltered
       .filter((gate) => gate.severity === 'blocking')
       .filter((gate) => {
         const result = postGateResults.find((r) => r.id === gate.id);

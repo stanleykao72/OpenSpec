@@ -26,6 +26,8 @@ import { buildTaskGroups, enrichGroupsWithDomains, resolveOrchestration } from '
 import type { OrchestrationHints } from '../../core/orchestration/types.js';
 import { loadPlugins } from '../../core/plugin/loader.js';
 import { readProjectConfig } from '../../core/project-config.js';
+import { extractCapabilities, extractRequirements } from '../../core/covers/extractor.js';
+import { injectDesignCovers, injectTasksCovers } from '../../core/covers/injector.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -85,6 +87,28 @@ export async function instructionsCommand(
     }
 
     const instructions = generateInstructions(context, artifactId, projectRoot);
+
+    // Covers auto-injection: enrich template with traceability annotations
+    const changeDir = context.changeDir;
+    if (artifactId === 'design') {
+      const proposalPath = path.join(changeDir, 'proposal.md');
+      if (fs.existsSync(proposalPath)) {
+        const proposalContent = fs.readFileSync(proposalPath, 'utf-8');
+        const capabilities = extractCapabilities(proposalContent);
+        if (capabilities.length > 0) {
+          instructions.template = injectDesignCovers(instructions.template, capabilities);
+        }
+      }
+    } else if (artifactId === 'tasks') {
+      const specsDir = path.join(changeDir, 'specs');
+      if (fs.existsSync(specsDir)) {
+        const requirements = extractRequirements(specsDir);
+        if (requirements.length > 0) {
+          instructions.template = injectTasksCovers(instructions.template, requirements);
+        }
+      }
+    }
+
     const isBlocked = instructions.dependencies.some((d) => !d.done);
 
     spinner?.stop();

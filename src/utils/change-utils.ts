@@ -2,6 +2,7 @@ import path from 'path';
 import { FileSystemUtils } from './file-system.js';
 import { writeChangeMetadata, validateSchemaName } from './change-metadata.js';
 import { readProjectConfig } from '../core/project-config.js';
+import type { ChangeClass } from '../core/artifact-graph/types.js';
 
 const DEFAULT_SCHEMA = 'spec-driven';
 const DEFAULT_CHANGES_DIR = path.join('openspec', 'changes');
@@ -42,6 +43,8 @@ export function getChangesDir(projectRoot: string): string {
 export interface CreateChangeOptions {
   /** The workflow schema to use (default: 'spec-driven') */
   schema?: string;
+  /** The change class for gate profile routing (default: 'feature') */
+  changeClass?: ChangeClass;
 }
 
 /**
@@ -180,11 +183,12 @@ export async function createChange(
   // Create the directory (including parent directories if needed)
   await FileSystemUtils.createDirectory(changeDir);
 
-  // Write metadata file with schema and creation date
+  // Write metadata file with schema, creation date, and optional class
   const today = new Date().toISOString().split('T')[0];
   writeChangeMetadata(changeDir, {
     schema: schemaName,
     created: today,
+    ...(options.changeClass ? { class: options.changeClass } : {}),
   }, projectRoot);
 
   return { schema: schemaName };

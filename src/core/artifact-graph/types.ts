@@ -120,6 +120,9 @@ export type PhaseOrchestration = z.infer<typeof PhaseOrchestrationSchema>;
 // Per-change metadata schema
 // Note: schema field is validated at parse time against available schemas
 // using a lazy import to avoid circular dependencies
+export const VALID_CHANGE_CLASSES = ['feature', 'single-cap', 'infra', 'hotfix'] as const;
+export type ChangeClass = typeof VALID_CHANGE_CLASSES[number];
+
 export const ChangeMetadataSchema = z.object({
   // Required: which workflow schema this change uses
   schema: z.string().min(1, { message: 'schema is required' }),
@@ -131,6 +134,9 @@ export const ChangeMetadataSchema = z.object({
       message: 'created must be YYYY-MM-DD format',
     })
     .optional(),
+
+  // Optional: change class for gate profile routing (default: feature)
+  class: z.enum(VALID_CHANGE_CLASSES).optional(),
 });
 
 export type ChangeMetadata = z.infer<typeof ChangeMetadataSchema>;

@@ -109,7 +109,17 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
-- After all artifacts are created, run \`openspec run start --phase propose --json\` to trigger alignment checks if defined`,
+- After all artifacts are created, run the propose pipeline to trigger alignment gates:
+   \`\`\`bash
+   openspec run start --change "<name>" --phase propose --json
+   \`\`\`
+   Then complete the phase to run post-gates (Tier A structural + Tier B traceability + Tier C semantic):
+   \`\`\`bash
+   openspec run complete --change "<name>" --phase propose --json
+   \`\`\`
+   - If any **hard-block gate fails** (Tier A or B): show the failure details, tell the user which artifacts need fixing, and do NOT declare propose complete
+   - If only **advisory gates** warn (Tier C): show warnings but proceed
+   - If all gates pass: declare propose complete`,
     license: 'MIT',
     compatibility: 'Requires openspec CLI.',
     metadata: { author: 'openspec', version: '1.0' },
@@ -221,6 +231,16 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
-- After all artifacts are created, run \`openspec run start --phase propose --json\` to trigger alignment checks if defined`
+- After all artifacts are created, run the propose pipeline to trigger alignment gates:
+   \`\`\`bash
+   openspec run start --change "<name>" --phase propose --json
+   \`\`\`
+   Then complete the phase to run post-gates (Tier A structural + Tier B traceability + Tier C semantic):
+   \`\`\`bash
+   openspec run complete --change "<name>" --phase propose --json
+   \`\`\`
+   - If any **hard-block gate fails** (Tier A or B): show the failure details, tell the user which artifacts need fixing, and do NOT declare propose complete
+   - If only **advisory gates** warn (Tier C): show warnings but proceed
+   - If all gates pass: declare propose complete`
   };
 }
