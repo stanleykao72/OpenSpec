@@ -49,13 +49,14 @@ export const SchemaParallelGroupSchema = z.object({
   gates: z.array(z.string()).optional(),
   hooks: z.array(z.string()).optional(),
   parallel: z.boolean(),
-  mode: z.enum(['default', 'subagents', 'teams']).optional(),
+  mode: z.enum(['default', 'subagents', 'teams', 'sequential']).optional(),
   synthesis: z.enum(['require-both-pass', 'any-pass', 'majority']).optional(),
 });
 
 // Orchestration section within a phase definition
 export const PhaseOrchestrationSchema = z.object({
   parallel_groups: z.array(SchemaParallelGroupSchema).optional(),
+  default_mode: z.enum(['default', 'subagents', 'teams', 'sequential']).optional(),
 });
 
 // Apply phase configuration for schema-aware apply instructions
