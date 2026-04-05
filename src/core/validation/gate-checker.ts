@@ -1,9 +1,76 @@
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { createHash } from 'crypto';
 import { execSync } from 'child_process';
 import path from 'path';
 import { Validator } from './validator.js';
 import type { LoadedPlugin, GateDefinition } from '../plugin/types.js';
 import type { ParallelGroup } from '../orchestration/types.js';
+
+// ── Fingerprinting ──────────────────────────────────────────────────────
+
+/** Tracked file patterns relative to changeDir */
+const TRACKED_PATTERNS = ['proposal.md', 'design.md', 'tasks.md'];
+const TRACKED_GLOB_DIR = 'specs';
+
+/**
+ * Collect tracked artifact files from a change directory.
+ * Returns sorted relative paths.
+ */
+function collectTrackedFiles(changeDir: string): string[] {
+  const files: string[] = [];
+
+  // Direct files
+  for (const name of TRACKED_PATTERNS) {
+    const fullPath = path.join(changeDir, name);
+    if (existsSync(fullPath)) {
+      files.push(name);
+    }
+  }
+
+  // specs/**/*.md (recursive)
+  const specsDir = path.join(changeDir, TRACKED_GLOB_DIR);
+  if (existsSync(specsDir)) {
+    walkMarkdownFilesFlat(specsDir, (relPath) => {
+      files.push(path.join(TRACKED_GLOB_DIR, relPath));
+    });
+  }
+
+  return files.sort();
+}
+
+/** Walk a directory recursively collecting .md file paths relative to dir. */
+function walkMarkdownFilesFlat(dir: string, cb: (relPath: string) => void, prefix = ''): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      walkMarkdownFilesFlat(path.join(dir, entry.name), cb, rel);
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      cb(rel);
+    }
+  }
+}
+
+/**
+ * Compute a SHA256 fingerprint of tracked artifact files in a change directory.
+ * The hash is deterministic: sorted relative paths, each entry is `path\ncontent`.
+ */
+export function computeFingerprint(changeDir: string): string {
+  const files = collectTrackedFiles(changeDir);
+  const hash = createHash('sha256');
+
+  for (const relPath of files) {
+    const content = readFileSync(path.join(changeDir, relPath), 'utf-8');
+    hash.update(relPath + '\n' + content);
+  }
+
+  return hash.digest('hex');
+}
 
 // ── Interfaces ──────────────────────────────────────────────────────────
 
@@ -247,12 +314,13 @@ export class GateChecker {
   /**
    * Execute a shell command and return its result.
    */
-  runCommand(command: string): { passed: boolean } & CommandDetails {
+  runCommand(command: string, env?: Record<string, string>): { passed: boolean } & CommandDetails {
     try {
       const stdout = execSync(command, {
         timeout: 30_000,
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...env },
       });
       return { passed: true, exit_code: 0, stdout, stderr: '' };
     } catch (err: unknown) {
@@ -341,7 +409,10 @@ export class GateChecker {
             details: { error: 'No command specified in gate definition' },
           };
         }
-        const result = this.runCommand(gate.command);
+        const result = this.runCommand(gate.command, {
+          OPENSPEC_CHANGE_DIR: changeDir,
+          OPENSPEC_CHANGE_NAME: path.basename(changeDir),
+        });
         return {
           id: gate.id,
           description: `Command gate: ${gate.command}`,
@@ -415,6 +486,7 @@ export class GateChecker {
 
   /**
    * Write gate results to .gates/ directory in the change directory.
+   * Includes a content-based fingerprint for staleness detection.
    */
   persistGateResults(changeDir: string, results: GateCheckResult[]): void {
     const gatesDir = path.join(changeDir, '.gates');
@@ -428,9 +500,13 @@ export class GateChecker {
       writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
     }
 
+    // Compute fingerprint of tracked artifact files
+    const fingerprint = computeFingerprint(changeDir);
+
     // Write synthesis summary
     const synthesis = {
       timestamp: new Date().toISOString(),
+      fingerprint,
       total: results.length,
       passed: results.filter((r) => r.passed).length,
       failed: results.filter((r) => !r.passed).length,
@@ -442,6 +518,21 @@ export class GateChecker {
     };
     const synthesisPath = path.join(gatesDir, 'synthesis.json');
     writeFileSync(synthesisPath, JSON.stringify(synthesis, null, 2), 'utf-8');
+  }
+
+  /**
+   * Check if existing synthesis results are stale (artifact files changed since last gate run).
+   * Returns true if stale or no synthesis exists, false if fingerprint matches.
+   */
+  isSynthesisStale(changeDir: string): boolean {
+    const synthesis = this.readSynthesis(changeDir);
+    if (!synthesis) return true;
+
+    const storedFingerprint = synthesis.fingerprint as string | undefined;
+    if (!storedFingerprint) return true;
+
+    const currentFingerprint = computeFingerprint(changeDir);
+    return currentFingerprint !== storedFingerprint;
   }
 
   /**
