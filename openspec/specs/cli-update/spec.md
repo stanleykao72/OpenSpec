@@ -166,9 +166,7 @@ The archive slash command template SHALL support optional change ID arguments fo
 - **AND** wrap it in a clear structure like `<ChangeId>\n  $ARGUMENTS\n</ChangeId>` to indicate the expected argument
 - **AND** include validation steps in the template body to check if the change ID is valid
 
-## Edge Cases
-
-### Error Handling
+### Requirement: Error Handling
 
 The command SHALL handle edge cases gracefully.
 
@@ -188,18 +186,6 @@ The command SHALL handle edge cases gracefully.
 - **WHEN** considering custom directory names
 - **THEN** not supported in this change
 - **AND** the default directory name `openspec` SHALL be used
-
-## Success Criteria
-
-Users SHALL be able to:
-- Update OpenSpec instructions with a single command
-- Get the latest AI agent instructions
-- See clear confirmation of the update
-
-The update process SHALL be:
-- Simple and fast (no version checking)
-- Predictable (same result every time)
-- Self-contained (no network required)
 
 ### Requirement: Plugin overlay injection during update
 
@@ -226,3 +212,15 @@ The update command SHALL load active plugins and apply skill overlays to generat
 - **WHEN** `openspec init` generates initial skill files
 - **THEN** no plugin overlays are applied (plugins may not be configured yet at init time)
 - **AND** overlay injection only activates during `openspec update`
+
+## Success Criteria
+
+Users SHALL be able to:
+- Update OpenSpec instructions with a single command
+- Get the latest AI agent instructions
+- See clear confirmation of the update
+
+The update process SHALL be:
+- Simple and fast (no version checking)
+- Predictable (same result every time)
+- Self-contained (no network required)
