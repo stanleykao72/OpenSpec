@@ -239,28 +239,44 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
 /**
  * Validate artifact IDs in rules against a schema's artifacts.
  * Called during instruction loading (when schema is known).
- * Returns warnings for unknown artifact IDs.
+ * Returns warnings for artifact IDs that are unknown across ALL registered schemas.
+ *
+ * If a key is valid for another schema (present in `knownArtifactIds` but not in
+ * `validArtifactIds`), it is silently skipped — it simply does not apply to the
+ * current artifact. Only truly unknown keys produce warnings. This allows a
+ * single flat `rules:` map in config.yaml to cover multiple schemas.
  *
  * @param rules - The rules object from config
- * @param validArtifactIds - Set of valid artifact IDs from the schema
- * @param schemaName - Name of the schema for error messages
+ * @param validArtifactIds - Set of valid artifact IDs from the current schema
+ * @param schemaName - Name of the current schema for error messages
+ * @param knownArtifactIds - Optional set of artifact IDs known across all schemas.
+ *                          When provided, rule keys in this set but not in
+ *                          `validArtifactIds` are treated as "applies to another
+ *                          schema" and do not warn. If omitted, behavior falls back
+ *                          to the original single-schema validation.
  * @returns Array of warning messages for unknown artifact IDs
  */
 export function validateConfigRules(
   rules: Record<string, string[]>,
   validArtifactIds: Set<string>,
-  schemaName: string
+  schemaName: string,
+  knownArtifactIds?: Set<string>
 ): string[] {
   const warnings: string[] = [];
 
   for (const artifactId of Object.keys(rules)) {
-    if (!validArtifactIds.has(artifactId)) {
-      const validIds = Array.from(validArtifactIds).sort().join(', ');
-      warnings.push(
-        `Unknown artifact ID in rules: "${artifactId}". ` +
-          `Valid IDs for schema "${schemaName}": ${validIds}`
-      );
+    if (validArtifactIds.has(artifactId)) {
+      continue;
     }
+    // If the key is valid for another registered schema, skip silently.
+    if (knownArtifactIds && knownArtifactIds.has(artifactId)) {
+      continue;
+    }
+    const validIds = Array.from(validArtifactIds).sort().join(', ');
+    warnings.push(
+      `Unknown artifact ID in rules: "${artifactId}". ` +
+        `Valid IDs for schema "${schemaName}": ${validIds}`
+    );
   }
 
   return warnings;

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getSchemaDir, resolveSchema } from './resolver.js';
+import { getSchemaDir, listSchemasWithInfo, resolveSchema } from './resolver.js';
 import { ArtifactGraph } from './graph.js';
 import { detectCompleted } from './state.js';
 import { resolveSchemaForChange } from '../../utils/change-metadata.js';
@@ -241,10 +241,28 @@ export function generateInstructions(
   // Validate rules artifact IDs if config has rules (only once per session)
   if (projectConfig?.rules) {
     const validArtifactIds = new Set(context.graph.getAllArtifacts().map((a) => a.id));
+    // Build union of artifact IDs across all registered schemas so that rule
+    // keys valid for another schema are skipped silently (flat rules map can
+    // cover multiple schemas simultaneously).
+    const knownArtifactIds = new Set<string>();
+    try {
+      const loadedPlugins = effectiveProjectRoot
+        ? getLoadedPlugins(effectiveProjectRoot)
+        : undefined;
+      const allSchemas = listSchemasWithInfo(effectiveProjectRoot, loadedPlugins);
+      for (const info of allSchemas) {
+        for (const artifactId of info.artifacts) {
+          knownArtifactIds.add(artifactId);
+        }
+      }
+    } catch {
+      // If schema discovery fails, fall back to single-schema validation.
+    }
     const warnings = validateConfigRules(
       projectConfig.rules,
       validArtifactIds,
-      context.schemaName
+      context.schemaName,
+      knownArtifactIds.size > 0 ? knownArtifactIds : undefined
     );
 
     // Show each unique warning only once per session
