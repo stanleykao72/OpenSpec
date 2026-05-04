@@ -113,14 +113,14 @@ describe('config profile interactive flow', () => {
     }
   }
 
-  function addExtraVerifyWorkflowArtifacts(projectDir: string): void {
-    const verifySkillPath = path.join(projectDir, '.claude', 'skills', 'openspec-verify-change', 'SKILL.md');
-    fs.mkdirSync(path.dirname(verifySkillPath), { recursive: true });
-    fs.writeFileSync(verifySkillPath, 'name: openspec-verify-change\n', 'utf-8');
+  function addExtraNonCoreWorkflowArtifacts(projectDir: string): void {
+    const skillPath = path.join(projectDir, '.claude', 'skills', 'openspec-new-change', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, 'name: openspec-new-change\n', 'utf-8');
 
-    const verifyCommandPath = path.join(projectDir, '.claude', 'commands', 'opsx', 'verify.md');
-    fs.mkdirSync(path.dirname(verifyCommandPath), { recursive: true });
-    fs.writeFileSync(verifyCommandPath, '# verify\n', 'utf-8');
+    const commandPath = path.join(projectDir, '.claude', 'commands', 'opsx', 'new.md');
+    fs.mkdirSync(path.dirname(commandPath), { recursive: true });
+    fs.writeFileSync(commandPath, '# new\n', 'utf-8');
   }
 
   beforeEach(() => {
@@ -338,7 +338,7 @@ describe('config profile interactive flow', () => {
 
     saveGlobalConfig({ featureFlags: {}, profile: 'core', delivery: 'both', workflows: ['propose', 'explore', 'apply', 'verify', 'sync', 'archive'] });
     setupSyncedCoreBothArtifacts(tempDir);
-    addExtraVerifyWorkflowArtifacts(tempDir);
+    addExtraNonCoreWorkflowArtifacts(tempDir);
     select.mockResolvedValueOnce('keep');
 
     await runConfigCommand(['profile']);
