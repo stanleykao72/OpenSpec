@@ -246,3 +246,27 @@ apply:
     「目前在 {branch}，apply 必須在 feature branch。建議：git checkout -b feature/{change-name}」
 
     等用戶確認已切換後才繼續。
+
+archive:
+  steps:
+    - id: main-merged
+      method: free
+      instruction: gh pr merge --squash → master
+    - id: docs-updated
+      method: free
+      instruction: 檢查 Obsidian capability specs 狀態
+    - id: branch-cleaned
+      method: free
+      instruction: openspec archive + branch delete
+    - id: obsidian-synced
+      method: free
+      instruction: |
+        Sync specs to Obsidian vault — 必須手動執行（openspec archive CLI 不會自動觸發 archive.post hook）
+
+        1. ARCHIVE_DIR=openspec/changes/archive/$(date +%Y-%m-%d)-{change_name}
+        2. 從 $ARCHIVE_DIR/proposal.md 的 Impact section 抽 module name
+        3. ls $ARCHIVE_DIR/specs/ → 對每個 capability，read openspec/specs/{cap}/spec.md
+        4. 修 canonical spec 的 'TBD - created by archiving' 為具體 Purpose
+        5. mcp__obsidian__write_note path=modules/{module}/CAP-{cap}.md，frontmatter type=capability + status=IMPLEMENTED + tags=[capability]
+        6. content 包含 Context/Requirements/Implementation/History 4 個 sections
+        7. 既有 note → 保留 Context/Implementation，update Requirements，append History row
