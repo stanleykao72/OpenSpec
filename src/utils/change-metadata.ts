@@ -6,7 +6,7 @@ import { listSchemas } from '../core/artifact-graph/resolver.js';
 import { getLoadedPlugins } from '../core/plugin/context.js';
 import { readProjectConfig } from '../core/project-config.js';
 
-const METADATA_FILENAME = '.openspec.yaml';
+export const METADATA_FILENAME = '.openspec.yaml';
 
 /**
  * Error thrown when change metadata validation fails.

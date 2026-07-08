@@ -51,6 +51,5 @@ export {
 } from './instruction-loader.js';
 export type {
   PlanningHomeSummary,
-  AffectedAreasSummary,
   ActionContext,
 } from '../change-status-policy.js';

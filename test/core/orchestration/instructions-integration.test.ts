@@ -81,7 +81,7 @@ apply:
       tempRoot,
       'test-change',
       'test-schema',
-      'teams'
+      { orchestrationMode: 'teams' }
     );
 
     expect(result.orchestration).toBeDefined();
@@ -127,7 +127,7 @@ apply:
       tempRoot,
       'test-change',
       'test-schema',
-      'teams'
+      { orchestrationMode: 'teams' }
     );
 
     // Should be JSON serializable without errors
