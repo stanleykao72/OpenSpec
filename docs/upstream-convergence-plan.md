@@ -20,6 +20,8 @@ Repo: `openspec-fork`（`origin` = stanleykao72/OpenSpec，`upstream` = Fission-
 
 ## U — 可上 upstream（7）
 
+> **進度（2026-07-08）**：11c22d2 的 split-brain 半邊已修（fork PR #16 merged）；13bb4e9 → upstream issue [#1321](https://github.com/Fission-AI/OpenSpec/issues/1321)、56f4771 → [#1322](https://github.com/Fission-AI/OpenSpec/issues/1322)、2ada5c1 → [#1323](https://github.com/Fission-AI/OpenSpec/issues/1323)（各附 ready branch，upstream 回應後轉 PR）。**70f2958 重分類 U→K**：查證 upstream `init/update` 會部署 `openspec-sync-specs` skill（skill-generation.ts:67），「壞引用」只在本專案不跑 init 產 skill 的 opsx 環境成立 — upstream 沒病，patch 留 fork。0818116 維持 issue #1246 觀望。剩 11c22d2 本體（changesDir workspace PR，需對 upstream 現況重新設計 — upstream planning-home 已內建 changesDir 屬性，PR 會比 fork 原版小）。
+
 | sha | 說明 | 收斂動作 |
 |-----|------|---------|
 | `11c22d2` | `changesDir` 可設定（monorepo/vault 支援）；取代 16 處硬編 `openspec/changes` | 開 upstream PR（通用 monorepo 需求）。⚠️ 這正是 split-brain 一半的來源，見下 |
