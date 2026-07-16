@@ -369,7 +369,9 @@ export class PipelineRunner {
     if (!existsSync(gatesDir)) {
       mkdirSync(gatesDir, { recursive: true });
     }
-    const synthesisPath = path.join(gatesDir, 'synthesis.json');
+    // Phase-namespaced so successive phases never clobber earlier evidence
+    // (propose audit trail must survive apply/verify; vault T-166)
+    const synthesisPath = path.join(gatesDir, `synthesis-${this.phase}.json`);
     writeFileSync(synthesisPath, JSON.stringify(synthesis, null, 2), 'utf-8');
   }
 }

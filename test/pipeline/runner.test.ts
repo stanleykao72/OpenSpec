@@ -240,7 +240,7 @@ describe('PipelineRunner', () => {
       expect(result.postGates[0].passed).toBe(true);
     });
 
-    it('writes synthesis.json on success', async () => {
+    it('writes synthesis-apply.json on success', async () => {
       // Resolve ai-review gate
       const gatesDir = path.join(changeDir, '.gates');
       fs.mkdirSync(gatesDir, { recursive: true });
@@ -251,9 +251,9 @@ describe('PipelineRunner', () => {
       mockCheckGate.mockResolvedValueOnce({ id: 'gate-3', passed: true, description: 'TDD pass', details: {} });
 
       const runner = new PipelineRunner(tempDir, 'test-change', 'apply', emptyPlugins, changeDir, schemaWithGates, 'sess-013');
-      const result = await runner.complete();
+      await runner.complete();
 
-      const synthesisPath = path.join(gatesDir, 'synthesis.json');
+      const synthesisPath = path.join(gatesDir, 'synthesis-apply.json');
       expect(fs.existsSync(synthesisPath)).toBe(true);
 
       const synthesis = JSON.parse(fs.readFileSync(synthesisPath, 'utf-8'));
@@ -263,6 +263,31 @@ describe('PipelineRunner', () => {
       expect(synthesis.total).toBe(1);
       expect(synthesis.passed).toBe(1);
       expect(synthesis.failed).toBe(0);
+    });
+
+    it('writes phase-namespaced synthesis and preserves other phases', async () => {
+      const gatesDir = path.join(changeDir, '.gates');
+      fs.mkdirSync(gatesDir, { recursive: true });
+      // Pre-existing propose-phase evidence must survive an apply-phase run
+      const proposeRaw = JSON.stringify({ version: '1.0', phase: 'propose', total: 4, passed: 4, failed: 0 }, null, 2);
+      fs.writeFileSync(path.join(gatesDir, 'synthesis-propose.json'), proposeRaw, 'utf-8');
+      fs.writeFileSync(path.join(gatesDir, 'gate-2.json'), JSON.stringify({
+        id: 'gate-2', passed: true, resolvedBy: 'main-agent', resolvedAt: new Date().toISOString(),
+      }), 'utf-8');
+
+      mockCheckGate.mockResolvedValueOnce({ id: 'gate-3', passed: true, description: 'TDD pass', details: {} });
+
+      const runner = new PipelineRunner(tempDir, 'test-change', 'apply', emptyPlugins, changeDir, schemaWithGates, 'sess-016');
+      await runner.complete();
+
+      const applyPath = path.join(gatesDir, 'synthesis-apply.json');
+      expect(fs.existsSync(applyPath)).toBe(true);
+      const synthesis = JSON.parse(fs.readFileSync(applyPath, 'utf-8'));
+      expect(synthesis.phase).toBe('apply');
+
+      // propose evidence byte-identical, no legacy un-namespaced file created
+      expect(fs.readFileSync(path.join(gatesDir, 'synthesis-propose.json'), 'utf-8')).toBe(proposeRaw);
+      expect(fs.existsSync(path.join(gatesDir, 'synthesis.json'))).toBe(false);
     });
 
     it('releases lock on success', async () => {
@@ -316,7 +341,7 @@ describe('PipelineRunner', () => {
       expect(lockInfo!.sessionId).toBe('sess-020');
     });
 
-    it('synthesis.json gets new timestamp on re-run', async () => {
+    it('synthesis-apply.json gets new timestamp on re-run', async () => {
       // Resolve ai-review gate
       const gatesDir = path.join(changeDir, '.gates');
       fs.mkdirSync(gatesDir, { recursive: true });
@@ -328,13 +353,13 @@ describe('PipelineRunner', () => {
 
       const runner = new PipelineRunner(tempDir, 'test-change', 'apply', emptyPlugins, changeDir, schemaWithGates, 'sess-021');
       await runner.complete();
-      const synth1 = JSON.parse(fs.readFileSync(path.join(gatesDir, 'synthesis.json'), 'utf-8'));
+      const synth1 = JSON.parse(fs.readFileSync(path.join(gatesDir, 'synthesis-apply.json'), 'utf-8'));
 
       // Small delay to ensure different timestamps
       await new Promise(resolve => setTimeout(resolve, 10));
 
       await runner.complete();
-      const synth2 = JSON.parse(fs.readFileSync(path.join(gatesDir, 'synthesis.json'), 'utf-8'));
+      const synth2 = JSON.parse(fs.readFileSync(path.join(gatesDir, 'synthesis-apply.json'), 'utf-8'));
 
       expect(synth2.timestamp).not.toBe(synth1.timestamp);
       expect(synth2.sessionId).toBe('sess-021');

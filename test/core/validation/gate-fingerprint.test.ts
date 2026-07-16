@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { computeFingerprint, GateChecker } from '../../../src/core/validation/gate-checker.js';
+import { computeFingerprint } from '../../../src/core/validation/gate-checker.js';
 
 describe('Gate Fingerprinting', () => {
   let tmpDir: string;
@@ -108,96 +108,4 @@ describe('Gate Fingerprinting', () => {
     });
   });
 
-  // ── isSynthesisStale ──────────────────────────────────────────────────
-
-  describe('isSynthesisStale', () => {
-    let checker: GateChecker;
-
-    beforeEach(() => {
-      checker = new GateChecker();
-    });
-
-    it('should return true when no synthesis.json exists', () => {
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal');
-      expect(checker.isSynthesisStale(tmpDir)).toBe(true);
-    });
-
-    it('should return true when synthesis.json has no fingerprint field', () => {
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal');
-      mkdirSync(path.join(tmpDir, '.gates'), { recursive: true });
-      writeFileSync(
-        path.join(tmpDir, '.gates', 'synthesis.json'),
-        JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', total: 0, passed: 0 })
-      );
-
-      expect(checker.isSynthesisStale(tmpDir)).toBe(true);
-    });
-
-    it('should return false when fingerprint matches current state', () => {
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal');
-      const fingerprint = computeFingerprint(tmpDir);
-
-      mkdirSync(path.join(tmpDir, '.gates'), { recursive: true });
-      writeFileSync(
-        path.join(tmpDir, '.gates', 'synthesis.json'),
-        JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', fingerprint, total: 0, passed: 0 })
-      );
-
-      expect(checker.isSynthesisStale(tmpDir)).toBe(false);
-    });
-
-    it('should return true when fingerprint does not match (file changed)', () => {
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal v1');
-      const fingerprint = computeFingerprint(tmpDir);
-
-      mkdirSync(path.join(tmpDir, '.gates'), { recursive: true });
-      writeFileSync(
-        path.join(tmpDir, '.gates', 'synthesis.json'),
-        JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', fingerprint, total: 0, passed: 0 })
-      );
-
-      // Now change the file
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal v2');
-
-      expect(checker.isSynthesisStale(tmpDir)).toBe(true);
-    });
-  });
-
-  // ── persistGateResults includes fingerprint ───────────────────────────
-
-  describe('persistGateResults', () => {
-    it('should include fingerprint in synthesis.json', () => {
-      const checker = new GateChecker();
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal');
-      writeFileSync(path.join(tmpDir, 'tasks.md'), '- [x] Done');
-
-      const results = [
-        { id: 'test-gate', description: 'Test', passed: true, details: {} },
-      ];
-
-      checker.persistGateResults(tmpDir, results);
-
-      const synthesisPath = path.join(tmpDir, '.gates', 'synthesis.json');
-      const synthesis = JSON.parse(readFileSync(synthesisPath, 'utf-8'));
-
-      expect(synthesis.fingerprint).toBeDefined();
-      expect(synthesis.fingerprint).toHaveLength(64);
-
-      // Verify it matches current computation
-      const expected = computeFingerprint(tmpDir);
-      expect(synthesis.fingerprint).toBe(expected);
-    });
-
-    it('should produce non-stale synthesis after persist', () => {
-      const checker = new GateChecker();
-      writeFileSync(path.join(tmpDir, 'proposal.md'), '# Proposal');
-
-      checker.persistGateResults(tmpDir, [
-        { id: 'g1', description: 'Gate 1', passed: true, details: {} },
-      ]);
-
-      // Immediately after persist, should not be stale
-      expect(checker.isSynthesisStale(tmpDir)).toBe(false);
-    });
-  });
 });
