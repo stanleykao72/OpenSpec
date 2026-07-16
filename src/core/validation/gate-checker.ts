@@ -1,10 +1,9 @@
-import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { execSync } from 'child_process';
 import path from 'path';
 import { Validator } from './validator.js';
 import type { LoadedPlugin, GateDefinition } from '../plugin/types.js';
-import type { ParallelGroup } from '../orchestration/types.js';
 
 // ── Fingerprinting ──────────────────────────────────────────────────────
 
@@ -59,6 +58,10 @@ function walkMarkdownFilesFlat(dir: string, cb: (relPath: string) => void, prefi
 /**
  * Compute a SHA256 fingerprint of tracked artifact files in a change directory.
  * The hash is deterministic: sorted relative paths, each entry is `path\ncontent`.
+ *
+ * No production callers since the parallel-gate/staleness-cache path was removed
+ * (its writers clobbered phase evidence; see synthesis-phase-namespace-split).
+ * Kept as an exported, tested utility to minimise upstream-merge surface.
  */
 export function computeFingerprint(changeDir: string): string {
   const files = collectTrackedFiles(changeDir);
@@ -434,130 +437,6 @@ export class GateChecker {
           details: { error: `Unknown check type: "${gate.check}". Not a built-in type and no plugin provides it.` },
         };
       }
-    }
-  }
-
-  // ── Parallel gate execution ─────────────────────────────────────────
-
-  /**
-   * Execute gates in parallel groups.
-   * Command-type gates within a parallel group run via Promise.all().
-   * Prompt-type gates are returned as pending (ai_review_needed).
-   * Results are persisted to .gates/ directory.
-   */
-  async checkGatesParallel(
-    gates: GateInput[],
-    changeDir: string,
-    parallelGroups: ParallelGroup[]
-  ): Promise<GateCheckResult[]> {
-    const results: GateCheckResult[] = [];
-    const parallelGateIds = new Set(parallelGroups.flatMap((g) => g.ids));
-
-    // Process parallel groups
-    for (const group of parallelGroups) {
-      const groupGates = gates.filter((g) => group.ids.includes(g.id));
-
-      if (group.parallel) {
-        // Execute command gates in parallel
-        const promises = groupGates.map((gate) => this.checkGate(gate, changeDir));
-        const groupResults = await Promise.all(promises);
-        results.push(...groupResults);
-      } else {
-        // Execute sequentially
-        for (const gate of groupGates) {
-          const result = await this.checkGate(gate, changeDir);
-          results.push(result);
-        }
-      }
-    }
-
-    // Execute remaining gates sequentially
-    const sequentialGates = gates.filter((g) => !parallelGateIds.has(g.id));
-    for (const gate of sequentialGates) {
-      const result = await this.checkGate(gate, changeDir);
-      results.push(result);
-    }
-
-    // Persist results
-    this.persistGateResults(changeDir, results);
-
-    return results;
-  }
-
-  /**
-   * Write gate results to .gates/ directory in the change directory.
-   * Includes a content-based fingerprint for staleness detection.
-   */
-  persistGateResults(changeDir: string, results: GateCheckResult[]): void {
-    const gatesDir = path.join(changeDir, '.gates');
-    if (!existsSync(gatesDir)) {
-      mkdirSync(gatesDir, { recursive: true });
-    }
-
-    // Write individual gate results
-    for (const result of results) {
-      const resultPath = path.join(gatesDir, `${result.id}.json`);
-      writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
-    }
-
-    // Compute fingerprint of tracked artifact files
-    const fingerprint = computeFingerprint(changeDir);
-
-    // Write synthesis summary
-    const synthesis = {
-      timestamp: new Date().toISOString(),
-      fingerprint,
-      total: results.length,
-      passed: results.filter((r) => r.passed).length,
-      failed: results.filter((r) => !r.passed).length,
-      results: results.map((r) => ({
-        id: r.id,
-        passed: r.passed,
-        ai_review_needed: r.ai_review_needed ?? false,
-      })),
-    };
-    const synthesisPath = path.join(gatesDir, 'synthesis.json');
-    writeFileSync(synthesisPath, JSON.stringify(synthesis, null, 2), 'utf-8');
-  }
-
-  /**
-   * Check if existing synthesis results are stale (artifact files changed since last gate run).
-   * Returns true if stale or no synthesis exists, false if fingerprint matches.
-   */
-  isSynthesisStale(changeDir: string): boolean {
-    const synthesis = this.readSynthesis(changeDir);
-    if (!synthesis) return true;
-
-    const storedFingerprint = synthesis.fingerprint as string | undefined;
-    if (!storedFingerprint) return true;
-
-    const currentFingerprint = computeFingerprint(changeDir);
-    return currentFingerprint !== storedFingerprint;
-  }
-
-  /**
-   * Read a persisted gate result from .gates/ directory.
-   */
-  readGateResult(changeDir: string, gateId: string): GateCheckResult | null {
-    const resultPath = path.join(changeDir, '.gates', `${gateId}.json`);
-    try {
-      const content = readFileSync(resultPath, 'utf-8');
-      return JSON.parse(content) as GateCheckResult;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Read the synthesis summary from .gates/ directory.
-   */
-  readSynthesis(changeDir: string): Record<string, unknown> | null {
-    const synthesisPath = path.join(changeDir, '.gates', 'synthesis.json');
-    try {
-      const content = readFileSync(synthesisPath, 'utf-8');
-      return JSON.parse(content) as Record<string, unknown>;
-    } catch {
-      return null;
     }
   }
 
