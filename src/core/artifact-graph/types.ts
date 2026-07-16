@@ -59,6 +59,16 @@ export const PhaseOrchestrationSchema = z.object({
   default_mode: z.enum(['default', 'subagents', 'teams', 'sequential']).optional(),
 });
 
+// Propose phase configuration for schema-aware propose gates.
+// Unlike apply/verify, propose has no artifact prerequisites — the phase
+// exists as soon as the change does — so there is no `requires` field.
+export const ProposePhaseSchema = z.object({
+  // Quality gates (pre = before drafting, post = after artifacts complete)
+  gates: GatesSchema.optional(),
+  // Custom guidance for the propose phase
+  instruction: z.string().optional(),
+});
+
 // Apply phase configuration for schema-aware apply instructions
 export const ApplyPhaseSchema = z.object({
   // Artifact IDs that must exist before apply is available
@@ -101,6 +111,8 @@ export const SchemaYamlSchema = z.object({
   version: z.number().int().positive({ error: 'Version must be a positive integer' }),
   description: z.string().optional(),
   artifacts: z.array(ArtifactSchema).min(1, { error: 'At least one artifact required' }),
+  // Optional propose phase configuration (for schema-aware propose gates)
+  propose: ProposePhaseSchema.optional(),
   // Optional apply phase configuration (for schema-aware apply instructions)
   apply: ApplyPhaseSchema.optional(),
   // Optional verify phase configuration (for schema-aware verify instructions)
@@ -111,6 +123,7 @@ export const SchemaYamlSchema = z.object({
 
 // Derived TypeScript types
 export type Artifact = z.infer<typeof ArtifactSchema>;
+export type ProposePhase = z.infer<typeof ProposePhaseSchema>;
 export type ApplyPhase = z.infer<typeof ApplyPhaseSchema>;
 export type VerifyPhase = z.infer<typeof VerifyPhaseSchema>;
 export type ArchivePhase = z.infer<typeof ArchivePhaseSchema>;
