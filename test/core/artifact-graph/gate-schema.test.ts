@@ -341,5 +341,35 @@ artifacts:
       const schema = parseSchema(yaml);
       expect(schema.apply).toBeUndefined();
     });
+
+    it('should preserve propose gates instead of silently stripping them', () => {
+      // Regression: SchemaYamlSchema had no `propose` key, so zod stripped the
+      // whole section and every schema's propose gates ran as total:0 "passed".
+      const yaml = `
+name: with-propose-gates
+version: 1
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal
+    template: proposal.md
+    requires: []
+propose:
+  gates:
+    post:
+      - id: structural-alignment
+        check: capability-coverage
+        severity: blocking
+      - id: grill-me-quick
+        check: ai-review
+        severity: warning
+        prompt: Scan for risks
+`;
+      const schema = parseSchema(yaml);
+      expect(schema.propose).toBeDefined();
+      expect(schema.propose!.gates!.post).toHaveLength(2);
+      expect(schema.propose!.gates!.post![0].id).toBe('structural-alignment');
+      expect(schema.propose!.gates!.post![1].check).toBe('ai-review');
+    });
   });
 });
