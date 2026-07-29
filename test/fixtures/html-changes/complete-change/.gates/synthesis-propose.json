@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-07-29T08:16:37.432Z",
+  "sessionId": "20260729-081637-abcd",
+  "phase": "propose",
+  "total": 3,
+  "passed": 2,
+  "failed": 1,
+  "results": [
+    { "id": "structural-alignment", "passed": true },
+    { "id": "traceability", "passed": false },
+    { "id": "grill-me-quick", "passed": true, "ai_review_needed": true }
+  ]
+}
