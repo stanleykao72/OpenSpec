@@ -1,6 +1,6 @@
 # Tasks: add-openspec-html-command
 
-> 執行記錄（1.1–3.3）：`pnpm build` 與 `pnpm test` 全綠（122 test files / 2182 tests，含本 change 新增的 3 個 renderer 測試檔 + 1 個 command 測試檔，共 75 個新測試）。3.4（對 odoo-claude-code archive 內真實 change 實跑＋瀏覽器目視）不在本次實作範圍內，維持未勾選。
+> 執行記錄（1.1–3.3）：`pnpm build` 與 `pnpm test` 全綠（122 test files / 2182 tests，含本 change 新增的 3 個 renderer 測試檔 + 1 個 command 測試檔，共 75 個新測試）。3.4 已於主 session 實機驗收完成並勾選（見 3.4 與第 6 節）。
 
 ## 1. Renderer 核心
 
