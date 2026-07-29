@@ -39,6 +39,11 @@ odoo-claude-code 的 `deploy/templates/html/` 是 skill 生態的事實來源，
 
 fork 內建 schema loader 可讀 `schema.yaml` 的 `propose.gates`／`verify.gates`；站別推定沿 skill 版規則（`.gates` 產出形狀＋tasks 勾選）。寫死清單已在 skill 端被 verify 抓過 CRITICAL，不重犯。
 
+### Decision 5: CLI 輸出為完整獨立文件（實機驗收後的刻意反轉）
+**Covers**: `html-viewer-command`
+
+初版沿用 Artifact/skill 版「禁包殼標籤」約束，實機以 `file://` 開啟時 CJK 全亂碼——瀏覽器無 charset 宣告就猜錯編碼；Artifact 版沒事是因為發佈平台包裹時補 charset。CLI 的主要消費場景就是 file:// 直開，故反轉為：`<!doctype html>` ＋ html/head/body 各恰一次＋ `<meta charset="utf-8">` 於前 1024 bytes。spec requirement 已同步改寫並明記兩版約束相反的理由；對抗性測試白名單納入 wrapper 標籤。
+
 ## Risks / Trade-offs
 
 - [Risk] 兩套模板（TS 常數 vs deploy/templates）漂移 → conventions 變更時人工同步；fork 版測試鎖住結構斷言，漂移會被 fixture diff 抓到

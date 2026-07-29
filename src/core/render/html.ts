@@ -330,7 +330,7 @@ function readGatesFiles(realBase: string): GatesFileEntry[] {
   });
 }
 
-// ── Lifecycle station (design.md Decision-5-style heuristic; conservative
+// ── Lifecycle station (station-inference heuristic per design.md Decision 4; conservative
 //    by construction — ties/ambiguity resolve to the earlier station) ────
 
 export interface StationInput {
