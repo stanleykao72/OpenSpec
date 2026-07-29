@@ -24,6 +24,7 @@ import { readProjectConfig } from '../core/project-config.js';
 import { loadPlugins } from '../core/plugin/loader.js';
 import { validateAllPluginConfigs } from '../core/plugin/config-validator.js';
 import { GateCommand } from '../commands/gate.js';
+import { HtmlCommand } from '../commands/html.js';
 import { RunCommand } from '../commands/run.js';
 import { registerStoreCommand } from '../commands/store.js';
 import { registerDoctorCommand } from '../commands/doctor.js';
@@ -654,6 +655,23 @@ gateCmd
     } catch (error) {
       console.log();
       ora().fail(`Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// HTML viewer command
+program
+  .command('html <change-name>')
+  .description('Render a change\'s artifacts to a self-contained spec-viewer.html')
+  .option('--open', 'Open the generated file with the platform default opener')
+  .option('--out <path>', 'Write the HTML to this path instead of the change directory')
+  .action(async (changeName: string, options?: { open?: boolean; out?: string }) => {
+    try {
+      const htmlCommand = new HtmlCommand();
+      const outPath = await htmlCommand.execute(changeName, options ?? {});
+      console.log(outPath);
+    } catch (error) {
+      failWithError(error);
       process.exit(1);
     }
   });

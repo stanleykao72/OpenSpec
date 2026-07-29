@@ -827,6 +827,24 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
     ],
   },
   {
+    name: 'html',
+    description: "Render a change's artifacts to a self-contained spec-viewer.html",
+    acceptsPositional: true,
+    positionalType: 'change-id',
+    positionals: [{ name: 'change-name', type: 'change-id' }],
+    flags: [
+      {
+        name: 'open',
+        description: 'Open the generated file with the platform default opener',
+      },
+      {
+        name: 'out',
+        description: 'Write the HTML to this path instead of the change directory',
+        takesValue: true,
+      },
+    ],
+  },
+  {
     name: 'run',
     description: 'Pipeline runner for phase execution',
     flags: [],
