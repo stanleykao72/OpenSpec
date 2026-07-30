@@ -118,6 +118,12 @@ function renderInline(token: Token, state: RenderState): string {
     case 'link': {
       const link = token as Tokens.Link;
       const inner = renderInlineTokens(link.tokens, state) || escapeHtml(link.text);
+      // GFM bare autolinks (raw carries no `[`/`<` syntax shell) are outside
+      // the declared support set and mangle content — a `user:pw@host`
+      // connection string gets its password segment carved into a mailto link
+      // (T-185). Degrade them to text; explicit `[x](url)`, reference-style
+      // `[x][ref]` and CommonMark `<url>` autolinks keep their shell and pass.
+      if (!link.raw.startsWith('[') && !link.raw.startsWith('<')) return inner;
       const href = safeHref(link.href);
       // No `title` attribute is emitted at all: it carries no information the
       // viewer needs, and every attribute is one more injection surface to
