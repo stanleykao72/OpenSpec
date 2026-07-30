@@ -229,6 +229,7 @@ export const COMMENT_LAYER_HTML = `<!-- ========================================
   </p>
   <p class="spec-comment-progress" id="spec-comment-progress">已審 0 / 0 區塊</p>
   <button type="button" class="spec-comment-export-btn" id="spec-comment-export-btn">匯出評論為 Markdown</button>
+  <button type="button" class="spec-comment-export-btn" id="spec-comment-save-btn" hidden>存成檔案（給 Claude Code 讀回）</button>
   <p class="spec-comment-export-result" id="spec-comment-export-result" hidden></p>
   <ul class="spec-comment-list" id="spec-comment-list">
     <li class="spec-comment-empty">尚無評論——在主內容區反白文字即可留下評論。</li>
@@ -997,6 +998,60 @@ export const COMMENT_LAYER_SCRIPT = `<!-- ======================================
     }
   }
 
+  /* ---- 存成檔案（change comment-downloads-readback）----
+     Artifact runtime downloads capability：window.claude.downloads 存在時才
+     現形（按鈕以 hidden 出廠，HTML 常數維持靜態、確定性不受影響）。sink 是
+     檔案內容（純文字，非 HTML 解析情境），與剪貼簿 sink 同級——輸出
+     buildExportMarkdown() 原文不跳脫，兩路徑逐字相同。 ---- */
+
+  function sanitizedSaveFilename() {
+    var base = (CHANGE_NAME || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      // 檔名長度防呆：runtime 對 >512 字元檔名回 bad_request，且常見檔案系統
+      // 上限 255 bytes；截斷後再去尾 dash 保持形狀
+      .slice(0, 120)
+      .replace(/-+$/, "");
+    return "spec-comments-" + (base || "unknown-change") + ".md";
+  }
+
+  function saveCommentsFile() {
+    var dl = window.claude && window.claude.downloads;
+    if (!dl) return;
+    var filename = sanitizedSaveFilename();
+    dl.save({ filename: filename, data: buildExportMarkdown() }).then(
+      function () {
+        showExportResult(
+          "已存成檔案 " + filename + "（" + comments.length +
+          " 筆評論）——回 Claude Code 說「讀回評論」即可"
+        );
+      },
+      function (err) {
+        var code = err && err.code;
+        if (code === "declined") {
+          // 型別定義明言 declined 絕不自動重試
+          showExportResult("已取消存檔");
+        } else if (code === "rate_limited") {
+          showExportResult("已有確認框開啟或請求過密，稍後再試");
+        } else if (code === "bad_request" || code === "transform_error") {
+          showExportFallbackModal(buildExportMarkdown());
+          showExportResult("存檔請求無效，已顯示可複製的文字區塊");
+        } else if (code === "too_large") {
+          // 可恢復：內容大小所致，刪減評論後仍可再存——不藏按鈕，給可複製退路
+          showExportFallbackModal(buildExportMarkdown());
+          showExportResult("內容超過存檔大小上限，已顯示可複製的文字區塊");
+        } else {
+          // unavailable / not_granted / capability_* / 未知 code：本頁存檔
+          // 不可用，收起入口、指向剪貼簿路徑
+          var btn = document.getElementById("spec-comment-save-btn");
+          if (btn) btn.hidden = true;
+          showExportResult("此環境無法存檔，請改用「匯出評論為 Markdown」");
+        }
+      }
+    );
+  }
+
   /* ---- 事件綁定 ---- */
 
   document.addEventListener("mouseup", onSelectionMaybeChanged);
@@ -1062,6 +1117,12 @@ export const COMMENT_LAYER_SCRIPT = `<!-- ======================================
 
   var exportBtn = document.getElementById("spec-comment-export-btn");
   if (exportBtn) exportBtn.addEventListener("click", exportComments);
+
+  var saveBtn = document.getElementById("spec-comment-save-btn");
+  if (saveBtn && window.claude && window.claude.downloads) {
+    saveBtn.hidden = false;
+    saveBtn.addEventListener("click", saveCommentsFile);
+  }
 
   var modalCloseBtn = document.getElementById("spec-comment-modal-close");
   var modalEl = document.getElementById("spec-comment-modal");

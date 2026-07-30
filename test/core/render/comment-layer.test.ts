@@ -84,6 +84,7 @@ interface Page {
   refs: Record<string, any>;
   storage: ReturnType<typeof makeMapLocalStorage>;
   clipboardWrites: string[];
+  saveCalls: Array<{ filename: string; data: string }>;
   setSelection: (s: any) => void;
   submitVia: (selText: string, range: any, commentText: string) => void;
 }
@@ -117,6 +118,10 @@ function bootPage(
     changeName?: string | null;
     localStorage?: ReturnType<typeof makeMapLocalStorage>;
     clipboard?: 'ok' | 'fail' | 'absent';
+    // downloads capability stub（change comment-downloads-readback）：
+    // 'absent'＝window.claude 無 downloads 成員；'ok'＝save 成功；
+    // 其餘值＝以該 error code reject
+    downloads?: 'absent' | 'ok' | 'declined' | 'rate_limited' | 'bad_request' | 'too_large' | 'unavailable';
   } = {}
 ): Page {
   const { changeName = 'demo-change', clipboard = 'ok' } = options;
@@ -167,6 +172,9 @@ function bootPage(
   panel.appendChild(progress);
   const exportBtn = el('button', { id: 'spec-comment-export-btn' });
   panel.appendChild(exportBtn);
+  const saveBtn = el('button', { id: 'spec-comment-save-btn' });
+  saveBtn.hidden = true;
+  panel.appendChild(saveBtn);
   const exportResult = el('p', { id: 'spec-comment-export-result' });
   exportResult.hidden = true;
   panel.appendChild(exportResult);
@@ -223,6 +231,22 @@ function bootPage(
     getSelection: () => selectionState,
   };
 
+  // downloads capability stub：window.claude 恆存在（對齊平台 kernel 行為），
+  // 成員 downloads 只在 stub 啟用時出現
+  const saveCalls: Array<{ filename: string; data: string }> = [];
+  const downloads = options.downloads ?? 'absent';
+  win.claude = {};
+  if (downloads !== 'absent') {
+    win.claude.downloads = {
+      save: (req: { filename: string; data: string }) => {
+        saveCalls.push({ filename: req.filename, data: req.data });
+        return downloads === 'ok'
+          ? Promise.resolve({ status: 'saved' })
+          : Promise.reject({ code: downloads, message: downloads });
+      },
+    };
+  }
+
   const ctx = vm.createContext({
     document: doc,
     window: win,
@@ -237,7 +261,7 @@ function bootPage(
 
   const refs = {
     root, main, proposal, pText, req, reqP, panel, privacy, storageNote, progress,
-    exportBtn, exportResult, list, toggle, countSpan, floatBtn, form, formQuote,
+    exportBtn, saveBtn, exportResult, list, toggle, countSpan, floatBtn, form, formQuote,
     formInput, formCancel, modal, modalTextarea, modalClose, cbProposal,
   };
 
@@ -246,6 +270,7 @@ function bootPage(
     refs,
     storage,
     clipboardWrites,
+    saveCalls,
     setSelection: (s) => (selectionState = s),
     submitVia(selText, range, commentText) {
       this.setSelection(makeSelection(selText, range));
@@ -584,5 +609,93 @@ describe('comment layer — separability（5.1/5.2 的離線部分）', () => {
     p.refs.list.dispatch('click', { target: delBtn });
     expect(p.doc.getElementById('proposal')).toBeTruthy();
     expect(p.refs.pText.textContent).toBe('alpha beta gamma delta');
+  });
+});
+
+describe('存成檔案 — downloads capability（change comment-downloads-readback）', () => {
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('capability 缺席時按鈕維持 hidden，匯出行為不變', async () => {
+    const p = bootPage();
+    expect(p.refs.saveBtn.hidden).toBe(true);
+    p.refs.exportBtn.dispatch('click', {});
+    await flush();
+    expect(p.clipboardWrites.length).toBe(1);
+    expect(p.saveCalls.length).toBe(0);
+  });
+
+  it('capability 存在時按鈕現形；save 收到淨化檔名與逐字相同的 Markdown', async () => {
+    const p = bootPage({ downloads: 'ok' });
+    expect(p.refs.saveBtn.hidden).toBe(false);
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.saveCalls.length).toBe(1);
+    expect(p.saveCalls[0].filename).toBe('spec-comments-demo-change.md');
+    expect(p.refs.exportResult.textContent).toContain('已存成檔案');
+    p.refs.exportBtn.dispatch('click', {});
+    await flush();
+    expect(p.clipboardWrites[0]).toBe(p.saveCalls[0].data);
+  });
+
+  it('change 名淨化後為空時檔名用 unknown-change', async () => {
+    const p = bootPage({ downloads: 'ok', changeName: '純中文名稱' });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.saveCalls[0].filename).toBe('spec-comments-unknown-change.md');
+  });
+
+  it('declined：提示已取消、不重試、不開 fallback modal', async () => {
+    const p = bootPage({ downloads: 'declined' });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.saveCalls.length).toBe(1);
+    expect(p.refs.exportResult.textContent).toContain('取消');
+    expect(p.refs.modal.hidden).toBe(true);
+    expect(p.refs.saveBtn.hidden).toBe(false);
+  });
+
+  it('bad_request：退回可全選複製的 fallback modal', async () => {
+    const p = bootPage({ downloads: 'bad_request' });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.refs.modal.hidden).toBe(false);
+    expect(p.refs.modalTextarea.value).toContain('Spec-viewer 審查評論匯出');
+  });
+
+  it('too_large：可恢復——不藏按鈕、退回 fallback modal', async () => {
+    const p = bootPage({ downloads: 'too_large' });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.refs.saveBtn.hidden).toBe(false);
+    expect(p.refs.modal.hidden).toBe(false);
+    expect(p.refs.exportResult.textContent).toContain('上限');
+  });
+
+  it('超長 change 名的檔名被截斷到安全長度', async () => {
+    const long = 'a'.repeat(300);
+    const p = bootPage({ downloads: 'ok', changeName: long });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.saveCalls[0].filename.length).toBeLessThanOrEqual(140);
+    expect(p.saveCalls[0].filename).toMatch(/^spec-comments-a+\.md$/);
+  });
+
+  it('截斷邊界落在 dash 時尾端連字號被清除', async () => {
+    // 119 個 a + 非法字元（轉成 '-'）+ 更多字：截到 120 字元時第 120 位是 '-'
+    const name = 'a'.repeat(119) + '!' + 'b'.repeat(50);
+    const p = bootPage({ downloads: 'ok', changeName: name });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    const base = p.saveCalls[0].filename.replace(/^spec-comments-/, '').replace(/\.md$/, '');
+    expect(base.endsWith('-')).toBe(false);
+    expect(base).toBe('a'.repeat(119));
+  });
+
+  it('unavailable：隱藏按鈕並指向剪貼簿路徑', async () => {
+    const p = bootPage({ downloads: 'unavailable' });
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.refs.saveBtn.hidden).toBe(true);
+    expect(p.refs.exportResult.textContent).toContain('匯出');
   });
 });
