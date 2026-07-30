@@ -85,8 +85,15 @@ export const SPEC_VIEWER_STYLE = `<style>
     --spec-accent-fg: #ffffff;
   }
 
-  * { box-sizing: border-box; }
-  body {
+  /* Everything is scoped under the .spec-viewer content root rather than
+     styling body / * / a directly. In artifact-body mode this markup is a
+     fragment inside someone else's page, and naked element selectors would
+     restyle the host document (change html-viewer-markdown-artifact-mode,
+     design Decision 2 risk row). Do not reintroduce bare element selectors. */
+  .spec-viewer, .spec-viewer *, .spec-viewer *::before, .spec-viewer *::after {
+    box-sizing: border-box;
+  }
+  .spec-viewer {
     margin: 0;
     padding: 1.5rem clamp(1rem, 4vw, 3rem) 3rem;
     background: var(--spec-bg);
@@ -95,9 +102,94 @@ export const SPEC_VIEWER_STYLE = `<style>
     line-height: 1.55;
     overflow-x: hidden;
   }
-  .spec-scroll-x { overflow-x: auto; }
-  h1, h2, h3 { line-height: 1.3; }
-  a { color: var(--spec-accent); }
+  /* Artifact-body mode: this fragment IS the page's top-level content, and the
+     host skeleton may clip overflow on the root elements — with all our styling
+     moved off the body element onto .spec-viewer, nothing would let it scroll
+     and the page renders as a non-scrollable clipped box (caught in live
+     Artifact testing, not by offline tests). Anchored via :has on our own class
+     so it can only ever apply when our fragment is the page's direct content —
+     an unrelated host page is untouched. Only overflow is affected. */
+  html:has(> body > .spec-viewer), body:has(> .spec-viewer) {
+    overflow-y: auto;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .spec-viewer .spec-scroll-x { overflow-x: auto; }
+  .spec-viewer h1, .spec-viewer h2, .spec-viewer h3 { line-height: 1.3; }
+  .spec-viewer a { color: var(--spec-accent); }
+
+  /* Rendered markdown blocks (change html-viewer-markdown-artifact-mode). */
+  .spec-viewer .spec-md > :first-child { margin-top: 0; }
+  .spec-viewer .spec-md > :last-child { margin-bottom: 0; }
+  .spec-viewer .spec-md h1, .spec-viewer .spec-md h2, .spec-viewer .spec-md h3,
+  .spec-viewer .spec-md h4, .spec-viewer .spec-md h5, .spec-viewer .spec-md h6 {
+    margin: 1rem 0 .5rem; font-size: .98rem;
+  }
+  .spec-viewer .spec-md p { margin: .5rem 0; }
+  .spec-viewer .spec-md ul, .spec-viewer .spec-md ol { margin: .5rem 0; padding-left: 1.4rem; }
+  .spec-viewer .spec-md li { margin: .2rem 0; }
+  .spec-viewer .spec-md code {
+    padding: .1rem .3rem; border-radius: 4px;
+    background: var(--spec-bg); border: 1px solid var(--spec-border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em;
+  }
+  .spec-viewer .spec-md blockquote {
+    margin: .6rem 0; padding: .1rem .9rem;
+    border-left: 3px solid var(--spec-border); color: var(--spec-fg-muted);
+  }
+  .spec-viewer .spec-md hr { border: 0; border-top: 1px solid var(--spec-border); margin: 1rem 0; }
+  .spec-viewer .spec-md-scroll { overflow-x: auto; margin: .6rem 0; }
+  .spec-viewer .spec-md-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  .spec-viewer .spec-md-table th, .spec-viewer .spec-md-table td {
+    text-align: left; vertical-align: top; padding: .4rem .6rem;
+    border: 1px solid var(--spec-border);
+  }
+  .spec-viewer .spec-md-table th { background: var(--spec-bg); font-weight: 700; }
+  .spec-viewer .spec-md-table .align-center { text-align: center; }
+  .spec-viewer .spec-md-table .align-right { text-align: right; }
+  .spec-viewer .spec-md-code {
+    margin: .6rem 0; padding: .7rem .9rem; border-radius: 6px;
+    background: var(--spec-bg); border: 1px solid var(--spec-border);
+    font-size: .8rem; overflow-x: auto;
+  }
+  .spec-viewer .spec-md-code code { padding: 0; border: 0; background: none; }
+
+  /* mermaid edge-label contrast.
+     We only emit <pre class="mermaid">; the host platform renders it, and its
+     edge labels sit on a light label background while inheriting a light text
+     colour in dark mode — white on white, unreadable (reported from a live
+     Artifact view). Deliberately NOT requiring a .mermaid ancestor: the
+     platform may replace or rewrap that element, and a first attempt scoped
+     under .mermaid had no effect at all. Scoped to .spec-viewer, which is our
+     own content root, so a host page is still untouched. Every shape mermaid
+     has used for a label is covered (div.labelBkg, rect, span/p in a
+     foreignObject, SVG text/tspan) because the exact markup varies by version.
+     !important is required, not decorative: mermaid injects its own <style>
+     into the generated SVG with id-prefixed selectors (#mermaid-NNN ...), whose
+     specificity beats any class chain we can write from outside. */
+  .spec-viewer .edgeLabel,
+  .spec-viewer .edgeLabel *,
+  .spec-viewer .edgeLabels .label,
+  .spec-viewer .edgeLabels .label * {
+    color: #14161a !important;
+    background-color: #f1f3f5 !important;
+  }
+  .spec-viewer .edgeLabel text,
+  .spec-viewer .edgeLabel tspan,
+  .spec-viewer text.edgeLabel,
+  .spec-viewer .edgeLabels text,
+  .spec-viewer .edgeLabels tspan {
+    fill: #14161a !important;
+  }
+  .spec-viewer .labelBkg,
+  .spec-viewer .edgeLabel rect,
+  .spec-viewer .edgeLabels rect,
+  .spec-viewer .edgeLabel .background {
+    fill: #f1f3f5 !important;
+    background-color: #f1f3f5 !important;
+    opacity: 1 !important;
+  }
 
   .spec-header {
     display: flex; flex-wrap: wrap; gap: .75rem 1.25rem;
@@ -337,8 +429,10 @@ export const SPEC_VIEWER_STYLE = `<style>
 
   /* Global [hidden] protection: author styles that declare their own display
      (e.g. flex/grid on a modal-like element) would otherwise beat the UA's
-     default [hidden]{display:none} rule. Load-bearing — do not remove. */
-  [hidden] { display: none !important; }
+     default [hidden]{display:none} rule. Load-bearing — do not remove.
+     Scoped to the viewer root so it cannot alter a host page in
+     artifact-body mode. */
+  .spec-viewer [hidden] { display: none !important; }
 </style>`;
 
 /** Vanilla-JS navigation behavior ported verbatim in spirit from skeleton.html:

@@ -842,6 +842,10 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         description: 'Write the HTML to this path instead of the change directory',
         takesValue: true,
       },
+      {
+        name: 'artifact-body',
+        description: 'Emit a wrapper-free HTML fragment for publishing as an Artifact (mutually exclusive with --open)',
+      },
     ],
   },
   {

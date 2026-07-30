@@ -21,6 +21,7 @@ import {
   TREE_LEGEND_TEXT,
   type LifecycleStation,
 } from './html-template.js';
+import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import {
   escapeHtml,
   sanitizeId,
@@ -54,10 +55,15 @@ export interface RenderChangeHtmlOptions {
    * authoritative declaration. Defaults to `false` (no note) so existing
    * callers that pass an explicitly-resolved schema are unaffected. */
   schemaAutoDefaulted?: boolean;
+  /** When true, emit a wrapper-free fragment for publishing as a Claude
+   * Artifact instead of a full standalone document (spec Requirement:
+   * artifact 發佈模式輸出無外殼片段). Defaults to false — the `file://`
+   * standalone document remains the default output. */
+  artifactBody?: boolean;
 }
 
 export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
-  const { changeDir, changeName, schema, schemaAutoDefaulted = false } = options;
+  const { changeDir, changeName, schema, schemaAutoDefaulted = false, artifactBody = false } = options;
 
   // Every subsequent filesystem read is anchored to this single
   // `realpathSync` of the change directory, computed once up front — every
@@ -95,6 +101,47 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
     rawMarkdown: cap.markdown,
   }));
 
+  // ── Content generator ────────────────────────────────────────────────
+  //
+  // Both output modes share this one body (change
+  // `html-viewer-markdown-artifact-mode`, design Decision 2): the two modes
+  // differ *only* in whether a document wrapper goes around it, so a style or
+  // section can never be present in one mode and missing in the other. The
+  // `<style>`/`<script>` live inside the body rather than a `<head>` because
+  // the artifact-body mode has no `<head>` to put them in (a `<style>` in
+  // `<body>` is valid HTML and applies to the whole document).
+  // Single content root: every style rule is scoped under `.spec-viewer`, so
+  // the fragment cannot restyle a host page. The `<style>` sits inside the
+  // root (valid flow content) rather than before it, so the fragment has
+  // exactly one top-level element.
+  const body: string[] = [];
+  body.push('<div class="spec-viewer">');
+  body.push(SPEC_VIEWER_STYLE);
+  body.push(renderHeader(changeName, gateStatuses, schemaAutoDefaulted));
+  body.push(renderRoute(station));
+  body.push(
+    renderShell({
+      changeName,
+      capabilityViews,
+      proposalMd,
+      designMd,
+      tasksMd,
+      gatesFiles,
+      emptySynthesisFiles,
+      inconsistentSynthesisFiles,
+    })
+  );
+  body.push(SPEC_VIEWER_NAV_SCRIPT);
+  body.push('</div>');
+
+  // Artifact-body mode: emit the fragment alone. The publishing platform wraps
+  // it in its own `<!doctype html>…<head>…<body>` skeleton, so emitting our
+  // own wrapper here would produce an invalid nested document (spec
+  // Requirement: artifact 發佈模式輸出無外殼片段).
+  if (artifactBody) {
+    return body.join('\n');
+  }
+
   const parts: string[] = [];
   // Full standalone document wrapper. Unlike the skill/Artifact variant of
   // this template (where the publishing platform supplies the skeleton and
@@ -108,24 +155,9 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
   parts.push('<meta charset="utf-8">');
   parts.push('<meta name="viewport" content="width=device-width, initial-scale=1">');
   parts.push(`<title>${escapeHtml(changeName)} · spec-viewer</title>`);
-  parts.push(SPEC_VIEWER_STYLE);
   parts.push('</head>');
   parts.push('<body>');
-  parts.push(renderHeader(changeName, gateStatuses, schemaAutoDefaulted));
-  parts.push(renderRoute(station));
-  parts.push(
-    renderShell({
-      changeName,
-      capabilityViews,
-      proposalMd,
-      designMd,
-      tasksMd,
-      gatesFiles,
-      emptySynthesisFiles,
-      inconsistentSynthesisFiles,
-    })
-  );
-  parts.push(SPEC_VIEWER_NAV_SCRIPT);
+  parts.push(...body);
   parts.push('</body>');
   parts.push('</html>');
 
@@ -710,6 +742,18 @@ function renderSidebar(changeName: string, capabilityViews: CapabilityView[]): s
   return lines.join('\n');
 }
 
+/**
+ * Renders an artifact's markdown body.
+ *
+ * mermaid fences stay as `<pre class="mermaid">` (escaped text) — the Artifact
+ * publishing platform renders those natively, and no mermaid runtime is
+ * embedded (change `html-viewer-markdown-artifact-mode`, design Decision 3).
+ * Everything else now goes through the markdown generator instead of being
+ * dumped verbatim into a `<pre>`, so tables read as tables and `**bold**`
+ * stops showing its asterisks (spec Requirement: markdown 內容以格式化 HTML
+ * 呈現). Unsupported/malformed markdown still falls back to escaped raw text
+ * inside `renderMarkdown`, so no artifact content is ever dropped.
+ */
 function renderMarkdownRaw(markdown: string): string {
   const segments = splitMermaidSegments(markdown);
   const html: string[] = [];
@@ -718,7 +762,7 @@ function renderMarkdownRaw(markdown: string): string {
     if (seg.kind === 'mermaid') {
       html.push(`<pre class="mermaid">${escapeHtml(seg.content)}</pre>`);
     } else {
-      html.push(`<pre class="spec-raw">${escapeHtml(seg.content)}</pre>`);
+      html.push(`<div class="spec-md">${renderMarkdown(seg.content)}</div>`);
     }
   }
   return html.join('\n');
@@ -844,7 +888,12 @@ function renderCapabilitySection(cap: CapabilityView): string {
     details.push(`      <div id="${reqId}" class="spec-requirement">`);
     details.push(`        <h4>Requirement: ${escapeHtml(req.name)}</h4>`);
     if (req.descriptionText.length > 0) {
-      details.push(`        <p>${escapeHtml(req.descriptionText)}</p>`);
+      // Requirement prose is the most-read text in the viewer, so its markdown
+      // must render rather than show markers. Block-level (not inline) because
+      // a description can span paragraphs and lists — and the wrapper is a
+      // <div>, not a <p>, since block children inside <p> are invalid HTML and
+      // the browser would silently close the paragraph early.
+      details.push(`        <div class="spec-md">${renderMarkdown(req.descriptionText)}</div>`);
     }
     if (req.scenarios.length > 0) {
       details.push('        <details class="spec-collapse">');
@@ -858,7 +907,7 @@ function renderCapabilitySection(cap: CapabilityView): string {
         } else {
           details.push('            <dl>');
           for (const row of scn.rows) {
-            details.push(`              <dt>${row.label}</dt><dd>${escapeHtml(row.text)}</dd>`);
+            details.push(`              <dt>${row.label}</dt><dd>${renderMarkdownInline(row.text)}</dd>`);
           }
           details.push('            </dl>');
         }
@@ -935,7 +984,7 @@ function renderTaskGroup(group: TaskGroup): string[] {
       `              <tr class="${stateCls}">`,
       `                <td class="check">${check}</td>`,
       `                <td class="no">${escapeHtml(item.id)}</td>`,
-      `                <td>${escapeHtml(item.text)}</td>`,
+      `                <td>${renderMarkdownInline(item.text)}</td>`,
       '              </tr>',
     ].join('\n');
   });

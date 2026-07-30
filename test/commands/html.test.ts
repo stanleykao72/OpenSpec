@@ -361,6 +361,47 @@ describe('HtmlCommand', () => {
       expect(html).not.toContain('schema 未宣告，依預設');
     });
   });
+
+  describe('--artifact-body', () => {
+    it('refuses --artifact-body with --open, before writing anything', async () => {
+      const changeDir = writeChange('add-auth', { 'proposal.md': '# P\n' });
+      const cmd = new HtmlCommand();
+
+      await expect(
+        cmd.execute('add-auth', { artifactBody: true, open: true }, tempDir)
+      ).rejects.toThrow(HtmlCommandError);
+      await expect(
+        cmd.execute('add-auth', { artifactBody: true, open: true }, tempDir)
+      ).rejects.toThrow(/cannot be combined with --open/);
+
+      // Refused up front: no output file, and no opener launched.
+      expect(fs.existsSync(path.join(changeDir, 'spec-viewer.html'))).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('writes a wrapper-free fragment and never opens it', async () => {
+      writeChange('add-auth', { 'proposal.md': '# P\n\n## Why\n\n| a | b |\n|---|---|\n| 1 | 2 |\n' });
+      const cmd = new HtmlCommand();
+      const outPath = await cmd.execute('add-auth', { artifactBody: true }, tempDir);
+
+      const html = fs.readFileSync(outPath, 'utf-8');
+      for (const tag of ['<!doctype', '<html', '<head', '<body']) {
+        expect(html.toLowerCase()).not.toContain(tag);
+      }
+      expect(html.trimStart().startsWith('<div class="spec-viewer">')).toBe(true);
+      expect(html).toContain('<table class="spec-md-table">');
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('still writes a full document when --artifact-body is absent', async () => {
+      writeChange('add-auth', { 'proposal.md': '# 中文\n' });
+      const cmd = new HtmlCommand();
+      const outPath = await cmd.execute('add-auth', {}, tempDir);
+      const html = fs.readFileSync(outPath, 'utf-8');
+      expect(html.startsWith('<!doctype html>')).toBe(true);
+      expect(html).toContain('<meta charset="utf-8">');
+    });
+  });
 });
 
 describe('resolveWithinContainer (P1c symlink TOCTOU boundary check)', () => {
@@ -502,4 +543,5 @@ describe('openPath', () => {
       expect(() => openPath('/tmp/foo.html', fake as any)).not.toThrow();
     });
   });
+
 });
