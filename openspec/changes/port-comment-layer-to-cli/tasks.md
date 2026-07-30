@@ -71,8 +71,10 @@
 
 - [x] 6.1 改寫 `html-template.ts` 檔頭那段「評論層是 Non-Goal」的註解——不改就會留下一句與 spec 相反的話，並註明理由何時被推翻（change `html-viewer-markdown-artifact-mode`）[skip-tdd]
 > TDD: html-template.ts 檔頭 Non-Goal 註解已改寫（記明理由被 html-viewer-markdown-artifact-mode 推翻、層已移植）[skip-tdd]
-- [ ] 6.2 實機：`--artifact-body` 發佈成 Artifact，實際選字加註記、勾已審、匯出、重載確認保留
-- [ ] 6.3 實機：同一 artifact redeploy（同 URL）後註記仍在
+- [x] 6.2 實機：`--artifact-body` 發佈成 Artifact，實際選字加註記、勾已審、匯出、重載確認保留
+> TDD: 使用者實測完成：發佈頁上選字加註記、勾已審、匯出皆可用（過程抓到 Notes 開關漏移植，已修＝7.6）
+- [x] 6.3 實機：同一 artifact redeploy（同 URL）後註記仍在
+> TDD: 使用者實測完成：republish 同一 URL（52324c3a）後重新整理，評論仍在——localStorage 分域 key 綁 change 名、跨 redeploy 存活
 - [x] 6.4 實機：預設模式 `file://` 直開，確認 `localStorage` 不可用時的降級提示如實顯示（或若可用則持久化正常）
 > TDD: headless file:// 實看：頁面完整渲染、已審 checkbox 在 Proposal/Specs 標題旁、捷運站 apply——並藉此抓到 CSS 未包 <style> 的真 bug（見 7.4）
 
