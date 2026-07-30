@@ -388,7 +388,7 @@ describe('HtmlCommand', () => {
       for (const tag of ['<!doctype', '<html', '<head', '<body']) {
         expect(html.toLowerCase()).not.toContain(tag);
       }
-      expect(html.trimStart().startsWith('<div class="spec-viewer">')).toBe(true);
+      expect(html.trimStart()).toMatch(/^<div class="spec-viewer" data-change-name="[^"]*">/);
       expect(html).toContain('<table class="spec-md-table">');
       expect(spawnMock).not.toHaveBeenCalled();
     });

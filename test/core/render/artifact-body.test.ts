@@ -52,10 +52,10 @@ describe('artifact-body mode — no document wrapper', () => {
       for (const tag of WRAPPER_TAGS) {
         expect(frag.toLowerCase(), `wrapper leaked: ${tag}`).not.toContain(tag);
       }
-      expect(frag.trimStart().startsWith('<div class="spec-viewer">')).toBe(true);
+      // The root carries data-change-name (the comment layer's localStorage
+      // scoping key), so match the opening tag by prefix rather than exactly.
+      expect(frag.trimStart()).toMatch(/^<div class="spec-viewer" data-change-name="[^"]*">/);
       expect(frag.trimEnd().endsWith('</div>')).toBe(true);
-      // Exactly one content root: no sibling before it.
-      expect(frag.trimStart().indexOf('<div class="spec-viewer">')).toBe(0);
     });
   });
 
@@ -170,10 +170,16 @@ const ALLOWED_TAGS = new Set([
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre', 'br', 'hr',
   'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'caption',
   'details', 'summary', 'dl', 'dt', 'dd',
+  // 評論層構件（change port-comment-layer-to-cli）
+  'aside', 'form', 'label', 'input', 'textarea', 'mark',
 ]);
 const ALLOWED_ATTRS = new Set([
   'id', 'class', 'href', 'rel', 'start', 'lang', 'charset', 'name', 'content',
   'type', 'open', 'aria-controls', 'aria-expanded', 'aria-label', 'data-target', 'style',
+  // 評論層構件（change port-comment-layer-to-cli）：checkbox 的分組 key／顯示名、
+  // 內容根元素的 localStorage 分域依據、面板控制項
+  'data-change-name', 'data-review-key', 'data-review-label', 'data-comment-id',
+  'placeholder', 'readonly', 'hidden',
 ]);
 
 function auditMarkup(html: string): { tags: string[]; attrs: string[] } {
