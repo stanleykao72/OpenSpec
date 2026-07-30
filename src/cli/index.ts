@@ -665,7 +665,11 @@ program
   .description('Render a change\'s artifacts to a self-contained spec-viewer.html')
   .option('--open', 'Open the generated file with the platform default opener')
   .option('--out <path>', 'Write the HTML to this path instead of the change directory')
-  .action(async (changeName: string, options?: { open?: boolean; out?: string }) => {
+  .option(
+    '--artifact-body',
+    'Emit a wrapper-free HTML fragment for publishing as an Artifact (mutually exclusive with --open)'
+  )
+  .action(async (changeName: string, options?: { open?: boolean; out?: string; artifactBody?: boolean }) => {
     try {
       const htmlCommand = new HtmlCommand();
       const outPath = await htmlCommand.execute(changeName, options ?? {});

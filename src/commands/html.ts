@@ -44,6 +44,9 @@ const ARCHIVE_NAME_PATTERN = /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+$/;
 export interface HtmlCommandOptions {
   open?: boolean;
   out?: string;
+  /** Emit a wrapper-free fragment for Artifact publishing instead of a full
+   * standalone document (spec Requirement: artifact 發佈模式輸出無外殼片段). */
+  artifactBody?: boolean;
 }
 
 export type SpawnFn = (command: string, args: string[]) => ChildProcess;
@@ -150,6 +153,18 @@ export class HtmlCommand {
   ): Promise<string> {
     this.rejectDangerousInput(changeNameArg);
 
+    // Mutually exclusive, and refused before anything is read or written: an
+    // artifact fragment has no <meta charset> and no document wrapper, so
+    // opening one in a browser shows a broken, mojibake page. Failing loudly
+    // beats "best effort" here — a warning would just be ignored while the
+    // user concludes the renderer is broken (spec Scenario: 互斥旗標).
+    if (options.artifactBody && options.open) {
+      throw new HtmlCommandError(
+        '--artifact-body cannot be combined with --open: a wrapper-free fragment is not a viewable document. ' +
+          'Publish it as an Artifact, or drop --artifact-body to get a standalone file.'
+      );
+    }
+
     const changesDir = getChangesDir(projectRoot);
     const { changeName, changeDir } = await this.resolveChangeLocation(changeNameArg, projectRoot, changesDir);
     // Symlink TOCTOU guard: `changeDir` was built from a directory-listing
@@ -168,7 +183,13 @@ export class HtmlCommand {
     const resolvedChangeDir = resolveWithinContainer(changeDir, changesDir, 'change directory');
 
     const { schema, schemaAutoDefaulted } = this.resolveSchemaSafely(resolvedChangeDir, projectRoot);
-    const html = renderChangeHtml({ changeDir: resolvedChangeDir, changeName, schema, schemaAutoDefaulted });
+    const html = renderChangeHtml({
+      changeDir: resolvedChangeDir,
+      changeName,
+      schema,
+      schemaAutoDefaulted,
+      artifactBody: options.artifactBody === true,
+    });
 
     const requestedOutPath = options.out ? path.resolve(options.out) : path.join(changeDir, 'spec-viewer.html');
     // Output location gets the same "use the resolved value" discipline as
