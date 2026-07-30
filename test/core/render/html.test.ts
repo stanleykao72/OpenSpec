@@ -239,11 +239,22 @@ describe('renderChangeHtml — adversarial fixture', () => {
       // standalone-document wrapper (CLI emits a full document with charset
       // — see the wrapper test in the complete-change describe block)
       'html', 'head', 'meta', 'body',
+      // comment layer (change port-comment-layer-to-cli): Notes panel, review
+      // checkboxes, comment form, export fallback modal, quote highlights
+      'aside', 'form', 'label', 'input', 'textarea', 'mark', 'blockquote', 'h2', 'h5', 'h6',
+      'strong', 'em', 'del', 'code', 'br', 'hr',
     ];
+    // Inline <script> bodies are JS source, not markup: an escapeHtml
+    // implementation legitimately contains the literal `/</g`, whose `</g`
+    // looks like a closing tag to any regex-based tag scan. The script is a
+    // constant in this repo (never artifact-derived), so excluding its body
+    // keeps this audit about markup — the same treatment artifact-body.test.ts
+    // applies. Everything outside the script tags is still scanned.
+    const markupOnly = html.replace(/<script>[\s\S]*?<\/script>/g, '<script></script>');
     const tagOpenRe = /<\/?([a-zA-Z][a-zA-Z0-9-]*)/g;
     let match: RegExpExecArray | null;
     const unexpected: string[] = [];
-    while ((match = tagOpenRe.exec(html)) !== null) {
+    while ((match = tagOpenRe.exec(markupOnly)) !== null) {
       if (!KNOWN_TAGS.includes(match[1].toLowerCase())) unexpected.push(match[1]);
     }
     expect(unexpected).toEqual([]);

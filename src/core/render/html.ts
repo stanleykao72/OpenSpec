@@ -23,6 +23,11 @@ import {
 } from './html-template.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import {
+  COMMENT_LAYER_STYLE,
+  COMMENT_LAYER_HTML,
+  COMMENT_LAYER_SCRIPT,
+} from './comment-layer.js';
+import {
   escapeHtml,
   sanitizeId,
   parseSpecRequirements,
@@ -115,8 +120,12 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
   // root (valid flow content) rather than before it, so the fragment has
   // exactly one top-level element.
   const body: string[] = [];
-  body.push('<div class="spec-viewer">');
+  // `data-change-name` 是評論層 localStorage 分域的唯一依據（change
+  // `port-comment-layer-to-cli` design Decision 1）——不是裝飾。缺席時評論層強制走
+  // in-memory 且不落地任何一筆評論，所以這個屬性必須跟著內容根元素一起輸出。
+  body.push(`<div class="spec-viewer" data-change-name="${escapeHtml(changeName)}">`);
   body.push(SPEC_VIEWER_STYLE);
+  body.push(COMMENT_LAYER_STYLE);
   body.push(renderHeader(changeName, gateStatuses, schemaAutoDefaulted));
   body.push(renderRoute(station));
   body.push(
@@ -131,7 +140,11 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
       inconsistentSynthesisFiles,
     })
   );
+  body.push(COMMENT_LAYER_HTML);
   body.push(SPEC_VIEWER_NAV_SCRIPT);
+  // 評論層 script 放在導覽 script 之後：獨立 IIFE，不共用變數/函式，順序只影響
+  // 「誰先綁事件」（兩者綁的目標不重疊），不構成依賴。
+  body.push(COMMENT_LAYER_SCRIPT);
   body.push('</div>');
 
   // Artifact-body mode: emit the fragment alone. The publishing platform wraps
@@ -600,6 +613,14 @@ function renderHeader(changeName: string, gateStatuses: GateStatus[], schemaAuto
     '  <div class="spec-gate-row">',
     `    ${pills}`,
     '  </div>',
+    // Notes 面板開關（評論層構件）。skeleton 裡這顆按鈕是掛在 header 內的獨立
+    // BLOCK（不在面板本體那段）——初版移植漏了它，結果評論加得進去、卻沒有
+    // 入口打開面板看（使用者實測回報）。它不是 position:fixed，DOM 位置有意義，
+    // 所以放在 header 而不是 COMMENT_LAYER_HTML。
+    '  <button type="button" class="spec-comment-toggle" id="spec-comment-toggle"',
+    '    aria-controls="spec-comment-panel" aria-expanded="false">',
+    '    💬 Notes（<span id="spec-comment-count">0</span>）',
+    '  </button>',
   ];
   if (schemaAutoDefaulted) {
     // `.openspec.yaml` was absent; the gate set above comes from a
@@ -754,6 +775,24 @@ function renderSidebar(changeName: string, capabilityViews: CapabilityView[]): s
  * 呈現). Unsupported/malformed markdown still falls back to escaped raw text
  * inside `renderMarkdown`, so no artifact content is ever dropped.
  */
+/**
+ * 區塊標題 + 「已審」勾選（評論層構件，change `port-comment-layer-to-cli`）。
+ *
+ * checkbox 置於 `<h3>` **內**，`data-review-key` 即該區塊自身的 id——評論層 script
+ * 靠這個 key 持久化勾選狀態。取用區塊標題的地方（`getSectionTitle()`）會先
+ * `cloneNode` 再遞迴移除 `.spec-review-check` 子樹，所以 checkbox 的「已審」二字
+ * 不會污染 Notes 面板顯示與匯出標題（conventions.md review-fix P1）。
+ */
+function sectionHeading(title: string, reviewKey: string, reviewLabel: string): string {
+  return [
+    `      <h3>${title}`,
+    '        <label class="spec-review-check">',
+    `          <input type="checkbox" class="spec-review-checkbox" data-review-key="${escapeHtml(reviewKey)}" data-review-label="${escapeHtml(reviewLabel)}"> 已審`,
+    '        </label>',
+    '      </h3>',
+  ].join('\n');
+}
+
 function renderMarkdownRaw(markdown: string): string {
   const segments = splitMermaidSegments(markdown);
   const html: string[] = [];
@@ -772,7 +811,7 @@ function renderProposalSection(proposalMd: string | null): string {
   if (proposalMd === null) {
     return [
       '    <section id="proposal" class="spec-card">',
-      '      <h3>Proposal</h3>',
+      sectionHeading('Proposal', 'proposal', 'Proposal'),
       '      <div class="spec-missing">proposal.md 未產出</div>',
       '    </section>',
     ].join('\n');
@@ -796,7 +835,7 @@ function renderProposalSection(proposalMd: string | null): string {
 
   return [
     '    <section id="proposal" class="spec-card">',
-    '      <h3>Proposal</h3>',
+    sectionHeading('Proposal', 'proposal', 'Proposal'),
     ...body,
     '    </section>',
   ].join('\n');
@@ -806,7 +845,7 @@ function renderDesignSection(designMd: string | null): string {
   if (designMd === null) {
     return [
       '    <section id="design" class="spec-card">',
-      '      <h3>Design</h3>',
+      sectionHeading('Design', 'design', 'Design'),
       '      <div class="spec-missing">design.md 未產出</div>',
       '    </section>',
     ].join('\n');
@@ -823,7 +862,7 @@ function renderDesignSection(designMd: string | null): string {
     body.push('      </details>');
   }
 
-  return ['    <section id="design" class="spec-card">', '      <h3>Design</h3>', ...body, '    </section>'].join(
+  return ['    <section id="design" class="spec-card">', sectionHeading('Design', 'design', 'Design'), ...body, '    </section>'].join(
     '\n'
   );
 }
@@ -849,7 +888,7 @@ function renderCapabilitySection(cap: CapabilityView): string {
   if (cap.rawMarkdown === null) {
     return [
       `    <section id="specs-${sanitizeId(cap.slug, 'capability')}" class="spec-card">`,
-      `      <h3>Specs · ${escapeHtml(cap.slug)}</h3>`,
+      sectionHeading(`Specs · ${escapeHtml(cap.slug)}`, `specs-${sanitizeId(cap.slug, 'cap')}`, `Specs · ${cap.displayName}`),
       '      <div class="spec-missing">spec.md 未產出</div>',
       '    </section>',
     ].join('\n');
@@ -864,7 +903,7 @@ function renderCapabilitySection(cap: CapabilityView): string {
     const rendered = renderMarkdownRaw(cap.rawMarkdown);
     return [
       `    <section id="specs-${sanitizeId(cap.slug, 'capability')}" class="spec-card">`,
-      `      <h3>Specs · ${escapeHtml(cap.slug)}</h3>`,
+      sectionHeading(`Specs · ${escapeHtml(cap.slug)}`, `specs-${sanitizeId(cap.slug, 'cap')}`, `Specs · ${cap.displayName}`),
       '      <div class="spec-missing">未解析出標準 Requirement 區塊，以下為原始內容</div>',
       rendered,
       '    </section>',
@@ -920,7 +959,7 @@ function renderCapabilitySection(cap: CapabilityView): string {
 
   return [
     `    <section id="specs-${sanitizeId(cap.slug, 'capability')}" class="spec-card">`,
-    `      <h3>Specs · ${escapeHtml(cap.slug)}</h3>`,
+    sectionHeading(`Specs · ${escapeHtml(cap.slug)}`, `specs-${sanitizeId(cap.slug, 'cap')}`, `Specs · ${cap.displayName}`),
     '      <div class="spec-scroll-x">',
     '        <table class="spec-req-table">',
     `          <caption>${cap.requirements.length} 個需求 · ${scenarioCount} 個場景</caption>`,
@@ -939,7 +978,7 @@ function renderTasksSection(tasksMd: string | null): string {
   if (tasksMd === null) {
     return [
       '    <section id="tasks" class="spec-card">',
-      '      <h3>Tasks</h3>',
+      sectionHeading('Tasks', 'tasks', 'Tasks'),
       '      <div class="spec-missing">tasks.md 未產出</div>',
       '    </section>',
     ].join('\n');
@@ -949,7 +988,7 @@ function renderTasksSection(tasksMd: string | null): string {
   if (groups.length === 0) {
     return [
       '    <section id="tasks" class="spec-card">',
-      '      <h3>Tasks</h3>',
+      sectionHeading('Tasks', 'tasks', 'Tasks'),
       '      <div class="spec-missing">tasks.md 內沒有解析出任何群組</div>',
       '    </section>',
     ].join('\n');
@@ -969,7 +1008,7 @@ function renderTasksSection(tasksMd: string | null): string {
     body.push(...renderTaskGroup(group));
   }
 
-  return ['    <section id="tasks" class="spec-card">', '      <h3>Tasks</h3>', ...body, '    </section>'].join('\n');
+  return ['    <section id="tasks" class="spec-card">', sectionHeading('Tasks', 'tasks', 'Tasks'), ...body, '    </section>'].join('\n');
 }
 
 function renderTaskGroup(group: TaskGroup): string[] {
@@ -1037,7 +1076,7 @@ function renderGateEvidenceSection(
   if (gatesFiles.length === 0) {
     return [
       '    <section id="gate-evidence" class="spec-card">',
-      '      <h3>Gate 證據</h3>',
+      sectionHeading('Gate 證據', 'gate-evidence', 'Gate 證據'),
       '      <div class="spec-missing">.gates/ 未產出</div>',
       '    </section>',
     ].join('\n');
@@ -1073,7 +1112,7 @@ function renderGateEvidenceSection(
     body.push('      </details>');
   }
 
-  return ['    <section id="gate-evidence" class="spec-card">', '      <h3>Gate 證據</h3>', ...body, '    </section>'].join(
+  return ['    <section id="gate-evidence" class="spec-card">', sectionHeading('Gate 證據', 'gate-evidence', 'Gate 證據'), ...body, '    </section>'].join(
     '\n'
   );
 }

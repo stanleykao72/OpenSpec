@@ -6,11 +6,14 @@
  * This fork must stay self-contained (no cross-repo reference at render
  * time, per design.md Decision 1), so the CSS variables/classes and the
  * vanilla navigation script are re-declared here as TS constants. The
- * comment layer (`.spec-comment-*` / `.spec-review-*`, the three
- * `BLOCK: 評論層 ...` sections in skeleton.html) is a Non-Goal for the CLI
- * renderer and is intentionally NOT ported — it depends on
- * `localStorage`/selection APIs that only make sense in an interactive
- * Artifact viewer, not a deterministic file the CLI writes to disk.
+ * comment layer (`.spec-comment-*` / `.spec-review-*`) was originally a
+ * Non-Goal here — "it depends on localStorage/selection APIs that only make
+ * sense in an interactive Artifact viewer, not a deterministic file the CLI
+ * writes to disk". That rationale died with `--artifact-body` (change
+ * `html-viewer-markdown-artifact-mode`): the CLI's fragment output IS
+ * published to that interactive viewer. The layer is now ported in
+ * `comment-layer.ts` (change `port-comment-layer-to-cli`), as constants with
+ * the same determinism guarantees as this file.
  *
  * Sync discipline: when odoo-claude-code's conventions change, a human
  * updates this file to match. Drift is caught by the renderer's own
