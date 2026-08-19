@@ -78,6 +78,12 @@ ${STORE_SELECTION_GUIDANCE}
 
    b. **Determine the target shape** based on whether \`openspec/specs/<capability>/spec.md\` already exists:
 
+      > ⚠️ These steps describe the **manual** transformation, for when you are not running
+      > \`openspec archive\`. The CLI already emits the frontmatter block for a new capability and
+      > appends this change to an existing spec's \`sources:\` list. If you ran \`openspec archive\`,
+      > do **not** add either again — you would duplicate them. What the CLI cannot write is the
+      > \`## Purpose\` prose; it leaves a \`TBD(archive):\` placeholder that you MUST replace.
+
       - **NEW capability (no existing main spec)**: synthesise the main spec from the delta by:
         - Replacing the title line with \`# <capability> Specification\`
         - Inserting a frontmatter block at the top with \`type: capability\`, the source \`module\` (carried over from the delta frontmatter when present), and a \`sources:\` list whose only entry is \`<change-name> (archived <YYYY-MM-DD>)\`
@@ -242,6 +248,12 @@ ${STORE_SELECTION_GUIDANCE}
    a. **Read the delta spec** at \`<changesDir>/<name>/specs/<capability>/spec.md\`. The delta uses headers like \`## ADDED Requirements\`, \`## MODIFIED Requirements\`, \`## REMOVED Requirements\`.
 
    b. **Determine the target shape** based on whether \`openspec/specs/<capability>/spec.md\` already exists:
+
+      > ⚠️ These steps describe the **manual** transformation, for when you are not running
+      > \`openspec archive\`. The CLI already emits the frontmatter block for a new capability and
+      > appends this change to an existing spec's \`sources:\` list. If you ran \`openspec archive\`,
+      > do **not** add either again — you would duplicate them. What the CLI cannot write is the
+      > \`## Purpose\` prose; it leaves a \`TBD(archive):\` placeholder that you MUST replace.
 
       - **NEW capability (no existing main spec)**: synthesise the main spec from the delta by:
         - Replacing the title line with \`# <capability> Specification\`
