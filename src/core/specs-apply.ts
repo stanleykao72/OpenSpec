@@ -108,10 +108,11 @@ export async function findSpecUpdates(changeDir: string, mainSpecsDir: string): 
 export async function buildUpdatedSpec(
   update: SpecUpdate,
   changeName: string,
-  options: { silent?: boolean } = {}
+  options: { silent?: boolean; archivedOn?: string } = {}
 ): Promise<{ rebuilt: string; counts: { added: number; modified: number; removed: number; renamed: number } }> {
   // Read change spec content (delta-format expected)
   const changeContent = await fs.readFile(update.source, 'utf-8');
+  const archivedOn = options.archivedOn ?? archiveDateStamp();
 
   // Parse deltas from the change spec file
   const plan = parseDeltaSpec(changeContent);
@@ -228,7 +229,10 @@ export async function buildUpdatedSpec(
       );
     }
     isNewSpec = true;
-    targetContent = buildSpecSkeleton(specName, changeName);
+    targetContent = buildSpecSkeleton(specName, changeName, {
+      archivedOn,
+      deltaContent: changeContent,
+    });
   }
 
   const structureIssues = findMainSpecStructureIssues(targetContent);
@@ -345,10 +349,14 @@ export async function buildUpdatedSpec(
     .join('\n\n')
     .trimEnd();
 
-  const rebuilt = [parts.before.trimEnd(), parts.headerLine, reqBody, parts.after]
+  const assembled = [parts.before.trimEnd(), parts.headerLine, reqBody, parts.after]
     .filter((s, idx) => !(idx === 0 && s === ''))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n');
+
+  // Record this change in the spec's frontmatter `sources:` list. No-op when the
+  // spec has no frontmatter or no `sources:` key, and idempotent on re-archive.
+  const rebuilt = appendArchiveSource(assembled, changeName, archivedOn);
 
   return {
     rebuilt,
@@ -386,11 +394,133 @@ export async function writeUpdatedSpec(
 }
 
 /**
- * Build a skeleton spec for new capabilities.
+ * Today's date as YYYY-MM-DD. Single source of truth for archive stamps so the
+ * skeleton, the `sources:` append and the archive directory name cannot drift.
  */
-export function buildSpecSkeleton(specFolderName: string, changeName: string): string {
-  const titleBase = specFolderName;
-  return `# ${titleBase} Specification\n\n## Purpose\nTBD - created by archiving change ${changeName}. Update Purpose after archive.\n\n## Requirements\n`;
+export function archiveDateStamp(now: Date = new Date()): string {
+  return now.toISOString().split('T')[0];
+}
+
+/** A parsed leading `---` frontmatter block, if the document has one. */
+interface FrontmatterParts {
+  /** Frontmatter body lines, without the delimiters. Empty when absent. */
+  lines: string[];
+  /** Everything after the closing delimiter. Whole document when absent. */
+  body: string;
+  present: boolean;
+}
+
+export function parseLeadingFrontmatter(content: string): FrontmatterParts {
+  const normalized = content.replace(/\r\n?/g, '\n');
+  if (!normalized.startsWith('---\n')) {
+    return { lines: [], body: content, present: false };
+  }
+  const end = normalized.indexOf('\n---\n', 3);
+  if (end === -1) {
+    // Unterminated block — treat as ordinary content rather than guessing.
+    return { lines: [], body: content, present: false };
+  }
+  return {
+    lines: normalized.slice(4, end).split('\n'),
+    body: normalized.slice(end + 5),
+    present: true,
+  };
+}
+
+/** The `sources:` entry an archived change contributes to a capability spec. */
+export function archiveSourceEntry(changeName: string, archivedOn: string): string {
+  return `${changeName} (archived ${archivedOn})`;
+}
+
+/**
+ * Append this change to the spec's frontmatter `sources:` list.
+ *
+ * Deliberately conservative and convention-agnostic:
+ * - no leading frontmatter, or no `sources:` key → returns the input unchanged,
+ *   byte for byte. Projects that do not use frontmatter see no difference.
+ * - the entry is already present → unchanged, so re-running archive after a
+ *   partial failure cannot duplicate it.
+ *
+ * Edited line-wise rather than round-tripped through the YAML serialiser: a
+ * round-trip would reformat unrelated keys in every spec it touches.
+ */
+export function appendArchiveSource(
+  content: string,
+  changeName: string,
+  archivedOn: string
+): string {
+  const fm = parseLeadingFrontmatter(content);
+  if (!fm.present) return content;
+
+  const entry = archiveSourceEntry(changeName, archivedOn);
+  const sourcesIndex = fm.lines.findIndex((line) => /^sources:\s*$/.test(line));
+  if (sourcesIndex === -1) return content;
+
+  // Collect the existing list items directly under `sources:`.
+  let end = sourcesIndex + 1;
+  let indent = '  ';
+  let sawItem = false;
+  while (end < fm.lines.length) {
+    const match = fm.lines[end].match(/^(\s+)-\s+(.*)$/);
+    if (!match) break;
+    if (!sawItem) {
+      indent = match[1];
+      sawItem = true;
+    }
+    if (match[2].trim() === entry) return content; // already recorded
+    end++;
+  }
+
+  const updated = [...fm.lines];
+  updated.splice(end, 0, `${indent}- ${entry}`);
+  return `---\n${updated.join('\n')}\n---\n${fm.body}`;
+}
+
+/**
+ * Build a skeleton spec for new capabilities.
+ *
+ * Emits the frontmatter the archive workflow documents (`type: capability`,
+ * `id`, `sources`) so a freshly created capability spec is not left for a human
+ * to hand-patch afterwards. `module` / `scope` are carried over from the delta
+ * spec when it declares them and omitted otherwise — the skeleton never invents
+ * a value it was not given.
+ *
+ * The Purpose stays a placeholder: only the author knows what the capability is
+ * for. It is worded so it reads as unfinished rather than as a filled-in field.
+ */
+export function buildSpecSkeleton(
+  specFolderName: string,
+  changeName: string,
+  options: { archivedOn?: string; deltaContent?: string } = {}
+): string {
+  const archivedOn = options.archivedOn ?? archiveDateStamp();
+  const carried: string[] = [];
+  if (options.deltaContent) {
+    const deltaFm = parseLeadingFrontmatter(options.deltaContent);
+    for (const key of ['module', 'scope']) {
+      const line = deltaFm.lines.find((l) => new RegExp(`^${key}:\\s+\\S`).test(l));
+      if (line) carried.push(line);
+    }
+  }
+
+  const frontmatter = [
+    '---',
+    'type: capability',
+    `id: ${specFolderName}`,
+    ...carried,
+    'sources:',
+    `  - ${archiveSourceEntry(changeName, archivedOn)}`,
+    '---',
+  ].join('\n');
+
+  return (
+    `${frontmatter}\n` +
+    `# ${specFolderName} Specification\n\n` +
+    `## Purpose\n` +
+    `TBD(archive): describe what this capability is for and replace this line ` +
+    `— created by archiving change ${changeName}.\n\n` +
+    `## Requirements\n`
+  );
 }
 
 function findMissingCurrentScenarios(current: RequirementBlock, incoming: RequirementBlock): string[] {
