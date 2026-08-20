@@ -3,6 +3,19 @@ import path from 'path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
+export const OPERATION_IDS = ['apply', 'archive'] as const;
+export type OperationId = (typeof OPERATION_IDS)[number];
+
+export interface OperationConfig {
+  guidance?: string[];
+}
+
+export type OperationsConfig = Partial<Record<OperationId, OperationConfig>>;
+
+const OperationConfigSchema = z.object({
+  guidance: z.array(z.string()).optional(),
+});
+
 /**
  * Zod schema for project configuration.
  *
@@ -61,6 +74,14 @@ export const ProjectConfigSchema = z.object({
     )
     .optional()
     .describe('Per-plugin configuration, keyed by plugin name'),
+  // Optional: per-operation advisory guidance, kept separate from artifact rules.
+  operations: z
+    .object({
+      apply: OperationConfigSchema.optional(),
+      archive: OperationConfigSchema.optional(),
+    })
+    .optional()
+    .describe('Per-operation advisory guidance'),
 
   // Note: the `references` field (id strings or {id, remote} maps) is
   // deliberately absent here — readProjectConfig parses and normalizes
@@ -74,7 +95,18 @@ export const ProjectConfigSchema = z.object({
     .string()
     .optional()
     .describe('Store id used as the OpenSpec root when no local planning shape exists'),
+
+  // Optional: GitHub Copilot integration preferences. `cloudAgent` is the
+  // opt-in for generating the Copilot cloud coding-agent files (a GitHub
+  // Actions workflow + agent file); absent means "not yet decided".
+  githubCopilot: z
+    .object({
+      cloudAgent: z.boolean().optional(),
+    })
+    .optional()
+    .describe('GitHub Copilot integration preferences'),
 });
+
 
 /** Normalized in-memory shape of a referenced store declaration. */
 export interface DeclarationEntry {
@@ -86,6 +118,90 @@ export interface DeclarationEntry {
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema> & {
   references?: DeclarationEntry[];
 };
+
+export interface OperationInputs {
+  context?: string;
+  operationGuidance?: string[];
+}
+
+export function loadOperationInputs(
+  projectConfig: ProjectConfig | null,
+  operationId: OperationId
+): OperationInputs {
+  const context =
+    projectConfig?.context !== undefined && projectConfig.context.trim().length > 0
+      ? projectConfig.context
+      : undefined;
+  const guidance = projectConfig?.operations?.[operationId]?.guidance;
+  const operationGuidance = guidance && guidance.length > 0 ? guidance : undefined;
+
+  return {
+    ...(context !== undefined ? { context } : {}),
+    ...(operationGuidance !== undefined ? { operationGuidance } : {}),
+  };
+}
+
+function parseOperations(raw: unknown): OperationsConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    console.warn(`Invalid 'operations' field in config (must be object)`);
+    return undefined;
+  }
+
+  const supported = new Set<string>(OPERATION_IDS);
+  const operations: OperationsConfig = {};
+
+  for (const [operationId, value] of Object.entries(raw)) {
+    if (!supported.has(operationId)) {
+      console.warn(
+        `Unknown operation ID '${operationId}' in config. Supported operation IDs: ${OPERATION_IDS.join(', ')}`
+      );
+      continue;
+    }
+
+    const typedOperationId = operationId as OperationId;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      console.warn(
+        `Invalid 'operations.${operationId}' field in config (must be object), ignoring this operation`
+      );
+      continue;
+    }
+
+    const operation = value as Record<string, unknown>;
+    const unknownFields = Object.keys(operation).filter((field) => field !== 'guidance');
+    if (unknownFields.length > 0) {
+      console.warn(
+        `Unknown field(s) in 'operations.${operationId}': ${unknownFields.join(', ')}. Supported fields: guidance`
+      );
+    }
+
+    if (operation.guidance === undefined) {
+      continue;
+    }
+
+    const guidanceResult = z.array(z.string()).safeParse(operation.guidance);
+    if (!guidanceResult.success) {
+      console.warn(
+        `Guidance for operation '${operationId}' must be an array of strings, ignoring this operation's guidance`
+      );
+      continue;
+    }
+
+    const guidance = guidanceResult.data.filter((entry) => entry.length > 0);
+    if (guidance.length < guidanceResult.data.length) {
+      console.warn(
+        `Some guidance for operation '${operationId}' are empty strings, ignoring them`
+      );
+    }
+    if (guidance.length > 0) {
+      operations[typedOperationId] = { guidance };
+    }
+  }
+
+  return Object.keys(operations).length > 0 ? operations : undefined;
+}
 
 /**
  * Parser for `references:` declarations: string entries or
@@ -177,8 +293,40 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
     return null; // No config is OK
   }
 
+  let content: string;
   try {
-    const content = readFileSync(configPath, 'utf-8');
+    content = readFileSync(configPath, 'utf-8');
+  } catch (error) {
+    console.warn(
+      `Failed to read openspec/config.yaml: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
+
+  // Fork: parse each distinct config CONTENT once per process.
+  //
+  // Upstream reads the config once per command and threads the result down, so
+  // its parse warnings appear once. The fork's `changesDir` and plugin features
+  // legitimately re-read it (`getChangesDir`, `getLoadedPlugins`), which turned
+  // a single malformed-config warning into one per reader. Keying the cache on
+  // the file's content — not just its path — means an edited or newly written
+  // config still re-parses, and still warns, so nothing is silenced.
+  const cacheKey = `${configPath}\u0000${content}`;
+  if (parsedConfigCache.has(cacheKey)) {
+    return parsedConfigCache.get(cacheKey) ?? null;
+  }
+  const parsed = parseProjectConfigContent(content, projectRoot);
+  parsedConfigCache.set(cacheKey, parsed);
+  return parsed;
+}
+
+const parsedConfigCache = new Map<string, ProjectConfig | null>();
+
+function parseProjectConfigContent(
+  content: string,
+  projectRoot: string
+): ProjectConfig | null {
+  try {
     const raw = parseYaml(content);
 
     if (!raw || typeof raw !== 'object') {
@@ -234,7 +382,11 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
 
       // First check if it's an object structure (guard against null since typeof null === 'object')
       if (typeof raw.rules === 'object' && raw.rules !== null && !Array.isArray(raw.rules)) {
-        const parsedRules: Record<string, string[]> = {};
+        // Artifact ids are intentionally not restricted to the built-in naming
+        // convention, so keys such as "constructor" remain valid for custom
+        // schemas. A null-prototype map preserves those keys as data without
+        // letting "__proto__" mutate the lookup object's prototype.
+        const parsedRules: Record<string, string[]> = Object.create(null);
         let hasValidRules = false;
 
         for (const [artifactId, rules] of Object.entries(raw.rules)) {
@@ -309,6 +461,11 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
       }
     }
 
+    const operations = parseOperations(raw.operations);
+    if (operations) {
+      config.operations = operations;
+    }
+
     const references = parseDeclarationList(raw.references);
     if (references) {
       config.references = references;
@@ -327,6 +484,24 @@ export function readProjectConfig(projectRoot: string): ProjectConfig | null {
       }
     }
 
+    // Parse githubCopilot preferences (only cloudAgent is recognized today).
+    if (raw.githubCopilot !== undefined) {
+      if (
+        typeof raw.githubCopilot === 'object' &&
+        raw.githubCopilot !== null &&
+        !Array.isArray(raw.githubCopilot)
+      ) {
+        const cloudAgent = (raw.githubCopilot as Record<string, unknown>).cloudAgent;
+        if (typeof cloudAgent === 'boolean') {
+          config.githubCopilot = { cloudAgent };
+        } else if (cloudAgent !== undefined) {
+          console.warn(`Invalid 'githubCopilot.cloudAgent' field in config (must be a boolean)`);
+        }
+      } else {
+        console.warn(`Invalid 'githubCopilot' field in config (must be an object)`);
+      }
+    }
+
     // Return partial config even if some fields failed
     return Object.keys(config).length > 0 ? (config as ProjectConfig) : null;
   } catch (error) {
@@ -342,46 +517,29 @@ function configPathForWarnings(projectRoot: string): string {
 }
 
 /**
- * Validate artifact IDs in rules against a schema's artifacts.
- * Called during instruction loading (when schema is known).
- * Returns warnings for artifact IDs that are unknown across ALL registered schemas.
- *
- * If a key is valid for another schema (present in `knownArtifactIds` but not in
- * `validArtifactIds`), it is silently skipped — it simply does not apply to the
- * current artifact. Only truly unknown keys produce warnings. This allows a
- * single flat `rules:` map in config.yaml to cover multiple schemas.
+ * Validate artifact IDs in rules against the artifacts of every available
+ * schema. The `rules:` map is global, but each change can use a different
+ * schema, so a key is only unknown when it matches no artifact in ANY schema.
+ * Returns warnings for keys that are unknown everywhere.
  *
  * @param rules - The rules object from config
- * @param validArtifactIds - Set of valid artifact IDs from the current schema
- * @param schemaName - Name of the current schema for error messages
- * @param knownArtifactIds - Optional set of artifact IDs known across all schemas.
- *                          When provided, rule keys in this set but not in
- *                          `validArtifactIds` are treated as "applies to another
- *                          schema" and do not warn. If omitted, behavior falls back
- *                          to the original single-schema validation.
+ * @param validArtifactIds - Set of valid artifact IDs across all schemas
  * @returns Array of warning messages for unknown artifact IDs
  */
 export function validateConfigRules(
   rules: Record<string, string[]>,
-  validArtifactIds: Set<string>,
-  schemaName: string,
-  knownArtifactIds?: Set<string>
+  validArtifactIds: Set<string>
 ): string[] {
   const warnings: string[] = [];
 
   for (const artifactId of Object.keys(rules)) {
-    if (validArtifactIds.has(artifactId)) {
-      continue;
+    if (!validArtifactIds.has(artifactId)) {
+      const validIds = Array.from(validArtifactIds).sort().join(', ');
+      warnings.push(
+        `Unknown artifact ID in rules: "${artifactId}". ` +
+          `It matches no artifact in any available schema. Known artifact IDs: ${validIds}`
+      );
     }
-    // If the key is valid for another registered schema, skip silently.
-    if (knownArtifactIds && knownArtifactIds.has(artifactId)) {
-      continue;
-    }
-    const validIds = Array.from(validArtifactIds).sort().join(', ');
-    warnings.push(
-      `Unknown artifact ID in rules: "${artifactId}". ` +
-        `Valid IDs for schema "${schemaName}": ${validIds}`
-    );
   }
 
   return warnings;

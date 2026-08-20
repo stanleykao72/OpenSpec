@@ -45,7 +45,7 @@ describe('parseLeadingFrontmatter', () => {
 
 describe('buildSpecSkeleton', () => {
   it('emits the frontmatter the archive workflow documents', () => {
-    const out = buildSpecSkeleton('widget-export', CHANGE, { archivedOn: DATE });
+    const out = buildSpecSkeleton('widget-export', CHANGE, undefined, { archivedOn: DATE });
     expect(out.startsWith('---\n')).toBe(true);
     expect(out).toContain('type: capability');
     expect(out).toContain('id: widget-export');
@@ -54,14 +54,14 @@ describe('buildSpecSkeleton', () => {
   });
 
   it('keeps the Purpose visibly unfinished', () => {
-    const out = buildSpecSkeleton('widget-export', CHANGE, { archivedOn: DATE });
+    const out = buildSpecSkeleton('widget-export', CHANGE, undefined, { archivedOn: DATE });
     // The old placeholder read like a filled-in field and survived into merged
     // specs. It must stay obviously a to-do.
     expect(out).toContain('TBD(archive):');
   });
 
   it('still produces a parseable main spec shape', () => {
-    const out = buildSpecSkeleton('widget-export', CHANGE, { archivedOn: DATE });
+    const out = buildSpecSkeleton('widget-export', CHANGE, undefined, { archivedOn: DATE });
     expect(out).toContain('# widget-export Specification');
     expect(out).toContain('## Purpose');
     expect(out).toContain('## Requirements');
@@ -69,13 +69,13 @@ describe('buildSpecSkeleton', () => {
 
   it('carries module and scope over from the delta spec when it declares them', () => {
     const delta = '---\ntype: capability\nmodule: billing\nscope: module\n---\n## ADDED Requirements\n';
-    const out = buildSpecSkeleton('widget-export', CHANGE, { archivedOn: DATE, deltaContent: delta });
+    const out = buildSpecSkeleton('widget-export', CHANGE, undefined, { archivedOn: DATE, deltaContent: delta });
     expect(out).toContain('module: billing');
     expect(out).toContain('scope: module');
   });
 
   it('omits module and scope rather than inventing them', () => {
-    const out = buildSpecSkeleton('widget-export', CHANGE, {
+    const out = buildSpecSkeleton('widget-export', CHANGE, undefined, {
       archivedOn: DATE,
       deltaContent: '## ADDED Requirements\n',
     });
@@ -142,7 +142,10 @@ describe('buildUpdatedSpec (existing capability)', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-sources-'));
+    // realpath: on macOS os.tmpdir() returns /var/... while the upstream path
+    // guard canonicalizes to /private/var/..., so an un-resolved root is
+    // rejected as "outside the allowed directory".
+    tempDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-sources-')));
   });
 
   afterEach(async () => {
@@ -157,10 +160,14 @@ describe('buildUpdatedSpec (existing capability)', () => {
       '## ADDED Requirements\n\n### Requirement: Export runs on demand\nThe system SHALL export on request.\n\n#### Scenario: User exports\n- **WHEN** the user clicks export\n- **THEN** a file is produced\n'
     );
     await fs.writeFile(target, targetContent);
-    return buildUpdatedSpec({ source, target, exists: true }, CHANGE, {
-      silent: true,
-      archivedOn: DATE,
-    });
+    return buildUpdatedSpec(
+      { id: 'widget-export', source, sourceRoot: tempDir, target, targetRoot: tempDir, exists: true },
+      CHANGE,
+      {
+        silent: true,
+        archivedOn: DATE,
+      }
+    );
   }
 
   it('records the change in the spec frontmatter sources list', async () => {

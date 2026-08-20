@@ -7,6 +7,7 @@
 import chalk from 'chalk';
 import { listSchemasWithInfo } from '../../core/artifact-graph/index.js';
 import { getLoadedPlugins } from '../../core/plugin/context.js';
+import { resolveRootForCommand } from '../../core/root-selection.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -14,6 +15,8 @@ import { getLoadedPlugins } from '../../core/plugin/context.js';
 
 export interface SchemasOptions {
   json?: boolean;
+  store?: string;
+  storePath?: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -21,8 +24,15 @@ export interface SchemasOptions {
 // -----------------------------------------------------------------------------
 
 export async function schemasCommand(options: SchemasOptions): Promise<void> {
-  const projectRoot = process.cwd();
-  const schemas = listSchemasWithInfo(projectRoot, getLoadedPlugins(projectRoot));
+  const root = await resolveRootForCommand(options, {
+    json: options.json,
+    failurePayload: { schemas: [], root: null },
+  });
+  if (!root) {
+    return;
+  }
+
+  const schemas = listSchemasWithInfo(root.path, getLoadedPlugins(root.path));
 
   if (options.json) {
     console.log(JSON.stringify(schemas, null, 2));

@@ -1,6 +1,6 @@
 ## Context
 
-<!-- Background and current state -->
+<!-- Current state and constraints that shape the approach. See proposal.md for motivation - don't restate it -->
 
 ## Goals / Non-Goals
 
@@ -12,7 +12,7 @@
 
 ## Decisions
 
-<!-- Key design decisions and rationale -->
+<!-- Key design decisions with rationale and alternatives considered -->
 <!-- Each Decision should include a **Covers**: annotation listing which capabilities it addresses -->
 <!-- Example: **Covers**: `user-auth`, `data-export` -->
 

@@ -1,11 +1,11 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { getTaskProgressForChange, formatTaskStatus } from '../utils/task-progress.js';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, type Dirent } from 'fs';
 import { MarkdownParser } from './parsers/markdown-parser.js';
 import { getChangesDir } from '../utils/change-utils.js';
 import type { RootOutput } from './root-selection.js';
+import { discoverSpecFiles } from '../utils/spec-discovery.js';
 
 interface ChangeInfo {
   name: string;
@@ -18,6 +18,24 @@ interface ListOptions {
   sort?: 'recent' | 'name';
   json?: boolean;
   root?: RootOutput;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+async function readChangeDirectoryEntries(changesDir: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(changesDir, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingPathError(error)) return [];
+    throw error;
+  }
 }
 
 /**
@@ -84,15 +102,8 @@ export class ListCommand {
     if (mode === 'changes') {
       const changesDir = getChangesDir(path.resolve(targetPath));
 
-      // Check if changes directory exists
-      try {
-        await fs.access(changesDir);
-      } catch {
-        throw new Error("No OpenSpec changes directory found. Run 'openspec init' first.");
-      }
-
       // Get all directories in changes (excluding archive)
-      const entries = await fs.readdir(changesDir, { withFileTypes: true });
+      const entries = await readChangeDirectoryEntries(changesDir);
       const changeDirs = entries
         .filter(entry => entry.isDirectory() && entry.name !== 'archive')
         .map(entry => entry.name);
@@ -167,9 +178,8 @@ export class ListCommand {
       return;
     }
 
-    const entries = await fs.readdir(specsDir, { withFileTypes: true });
-    const specDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-    if (specDirs.length === 0) {
+    const discovered = await discoverSpecFiles(specsDir);
+    if (discovered.length === 0) {
       if (json) {
         console.log(JSON.stringify({ specs: [], ...(root ? { root } : {}) }, null, 2));
       } else {
@@ -180,10 +190,9 @@ export class ListCommand {
 
     type SpecInfo = { id: string; requirementCount: number };
     const specs: SpecInfo[] = [];
-    for (const id of specDirs) {
-      const specPath = join(specsDir, id, 'spec.md');
+    for (const { id, specFile } of discovered) {
       try {
-        const content = readFileSync(specPath, 'utf-8');
+        const content = readFileSync(specFile, 'utf-8');
         const parser = new MarkdownParser(content);
         const spec = parser.parseSpec(id);
         specs.push({ id, requirementCount: spec.requirements.length });
