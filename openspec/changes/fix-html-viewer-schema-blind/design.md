@@ -56,7 +56,8 @@ gate 證據區塊的 `gate-evidence` id 不屬於 artifact，維持字面值。
 
 schema 無法解析（`.openspec.yaml` 壞掉、schema 名不存在）時 `renderChangeHtml`
 收到 `null`。此時退回 `proposal.md`／`specs` glob／`tasks.md`／`design.md` 的
-字面清單，行為與今日完全一致。**這不是新的猜測**：`resolveSchemaSafely` 已經
+字面清單：讀哪些檔、區塊 id、內容渲染與今日一致（順序同樣採宣告序，故
+Design 在 Tasks 之前，見下方 Risks）。**這不是新的猜測**：`resolveSchemaSafely` 已經
 在 `.openspec.yaml` 缺席、且檔名形狀夠像 spec-driven 時自動套預設 schema 並
 標記 `schemaAutoDefaulted`；D5 只覆蓋「連預設都套不上」的殘餘路徑。
 
