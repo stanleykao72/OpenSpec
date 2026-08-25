@@ -67,6 +67,130 @@ export interface RenderChangeHtmlOptions {
   artifactBody?: boolean;
 }
 
+// ── Artifact plan (schema-derived) ───────────────────────────────────────
+//
+// The set of artifacts this viewer reads comes from the change's own schema
+// declaration (`artifacts[].generates`), never from a literal filename list.
+// Hardcoding `proposal.md`/`design.md`/`tasks.md` made every non-spec-driven
+// change render as four "未產出" cards while its real artifacts sat untouched
+// in the change directory — a tool failure wearing the exact appearance of
+// "the work was never done". Gate declarations were already schema-driven
+// (`collectGateIdsForStation`); this is the artifact half catching up.
+
+/** How a planned artifact is rendered. */
+export type ArtifactKind = 'proposal' | 'capabilities' | 'tracks' | 'generic';
+
+export interface PlannedArtifact {
+  /** Schema artifact id. Also the section's HTML id and the comment layer's
+   * `data-review-key`, so it MUST stay stable for a given schema — changing
+   * it orphans every saved comment and 已審 checkbox for that section. */
+  id: string;
+  /** The schema's `generates` value: a relative path, or a glob for
+   * multi-file artifacts (the `specs` capability tree). */
+  file: string;
+  kind: ArtifactKind;
+  /** Section title, derived from the file's own name. */
+  title: string;
+}
+
+/**
+ * Used only when `schema` is null — i.e. the schema could not be resolved at
+ * all (malformed `.openspec.yaml`, unknown schema name). This reproduces the
+ * previous hardcoded behavior exactly, so an unresolvable schema degrades to
+ * today's output rather than to an empty page. It is NOT the "no
+ * `.openspec.yaml`" path: `resolveSchemaSafely` already applies the default
+ * schema there (and flags it via `schemaAutoDefaulted`).
+ */
+const FALLBACK_PLAN: readonly PlannedArtifact[] = [
+  { id: 'proposal', file: 'proposal.md', kind: 'proposal', title: 'Proposal' },
+  { id: 'specs', file: 'specs/**/*.md', kind: 'capabilities', title: 'Specs' },
+  { id: 'design', file: 'design.md', kind: 'generic', title: 'Design' },
+  { id: 'tasks', file: 'tasks.md', kind: 'tracks', title: 'Tasks' },
+];
+
+function isGlob(file: string): boolean {
+  return /[*?[]/.test(file);
+}
+
+/** Leading non-glob directory of a glob artifact (a `specs` glob → `specs`). */
+function globRootOf(file: string): string {
+  const globIdx = file.search(/[*?[]/);
+  const stem = globIdx === -1 ? file : file.slice(0, globIdx);
+  const segments = stem.split(/[\\/]+/).filter((s) => s.length > 0 && s !== '.');
+  return segments.length > 0 ? segments[segments.length - 1] : 'specs';
+}
+
+function normalizeRel(file: string): string {
+  return file
+    .split(/[\\/]+/)
+    .filter((s) => s.length > 0 && s !== '.')
+    .join('/');
+}
+
+function samePath(a: string, b: string): boolean {
+  return normalizeRel(a) === normalizeRel(b);
+}
+
+/**
+ * `backend-plan.md` → `Backend Plan`; a `specs` glob → `Specs`. Titles come
+ * from the filename rather than the artifact id so a reader can match what
+ * they see on the page against what they see in the directory listing.
+ */
+function titleFromFile(file: string): string {
+  const globIdx = file.search(/[*?[]/);
+  const stem = globIdx === -1 ? file : file.slice(0, globIdx);
+  const segments = stem.split(/[\\/]+/).filter((s) => s.length > 0 && s !== '.');
+  const last = segments.length > 0 ? segments[segments.length - 1] : file;
+  const base = last.replace(/\.[^.]+$/, '');
+  const words = base
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.length > 0 ? words.join(' ') : base;
+}
+
+/**
+ * Ordered render plan for a schema. Order is the schema's own declaration
+ * order — static, so repeat renders stay byte-identical (spec Requirement:
+ * 確定性輸出); a `readdirSync` order would not be.
+ */
+export function artifactPlan(schema: SchemaYaml | null): PlannedArtifact[] {
+  // An empty (or absent) artifact list is an unusable declaration, not a
+  // declaration of emptiness — rendering nothing at all would be this same
+  // bug wearing a different coat. Zod requires at least one artifact, so
+  // reaching here means the schema was hand-built or bypassed validation;
+  // degrade to the default set rather than to a blank page.
+  if (!schema || !Array.isArray(schema.artifacts) || schema.artifacts.length === 0) {
+    return FALLBACK_PLAN.map((a) => ({ ...a }));
+  }
+
+  // What makes an artifact the progress-tracked one is `apply.tracks`, not
+  // whether it happens to be called "tasks": odoo-refactor tracks
+  // `backend-plan.md`, odoo-bugfix `fix-notes.md`, odoo-trivial `memo.md`.
+  // Matching on the id would silently drop the progress table (and the
+  // apply-station inference that reads the same file) for all three.
+  const tracks = schema.apply?.tracks ?? null;
+
+  return schema.artifacts.map((a) => {
+    const file = a.generates;
+    let kind: ArtifactKind;
+    if (isGlob(file)) kind = 'capabilities';
+    else if (tracks !== null && samePath(file, tracks)) kind = 'tracks';
+    else if (a.id === 'proposal') kind = 'proposal';
+    else kind = 'generic';
+    return { id: a.id, file, kind, title: titleFromFile(file) };
+  });
+}
+
+/** One planned artifact plus whatever was actually found on disk. */
+interface RenderedArtifact {
+  plan: PlannedArtifact;
+  /** `null` = declared but absent → the section renders its 未產出 marker. */
+  markdown: string | null;
+  /** Non-null only for `kind: 'capabilities'`. */
+  capabilityViews: CapabilityView[] | null;
+}
+
 export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
   const { changeDir, changeName, schema, schemaAutoDefaulted = false, artifactBody = false } = options;
 
@@ -79,16 +203,61 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
   // than throwing.
   const realBase = resolveRealBase(changeDir);
 
-  const proposalMd = realBase ? readArtifactSafely(realBase, 'proposal.md') : null;
-  const designMd = realBase ? readArtifactSafely(realBase, 'design.md') : null;
-  const tasksMd = realBase ? readArtifactSafely(realBase, 'tasks.md') : null;
-  const capabilities = realBase ? readCapabilitySpecs(realBase) : [];
+  const plan = artifactPlan(schema);
+
+  // Only declared artifacts are read, and only declared artifacts get a
+  // section. An artifact the schema never declared gets no card at all — not
+  // even a "未產出" one: telling the reader that something their workflow
+  // never produces is missing is the same false alarm, pointed the other way
+  // (spec Requirement "artifacts 讀取與缺席處理").
+  const rawArtifacts = plan.map((a) => ({
+    plan: a,
+    markdown: a.kind === 'capabilities' || !realBase ? null : readArtifactSafely(realBase, a.file),
+    capabilities: a.kind === 'capabilities' && realBase ? readCapabilitySpecs(realBase, globRootOf(a.file)) : null,
+  }));
+
   const gatesFiles = realBase ? readGatesFiles(realBase) : [];
+
+  // Capability display names are resolved against the proposal when the
+  // schema has one; schemas without a proposal artifact simply fall back to
+  // the slug (`resolveCapabilityDisplayName` already handles `null`).
+  const proposalMd = rawArtifacts.find((a) => a.plan.kind === 'proposal')?.markdown ?? null;
+
+  const artifacts: RenderedArtifact[] = rawArtifacts.map((a) => ({
+    plan: a.plan,
+    markdown: a.markdown,
+    capabilityViews:
+      a.capabilities === null
+        ? null
+        : a.capabilities.map((cap) => ({
+            slug: cap.slug,
+            displayName: resolveCapabilityDisplayName(proposalMd, cap.slug, cap.markdown),
+            requirements: cap.markdown !== null ? parseSpecRequirements(cap.markdown) : [],
+            rawMarkdown: cap.markdown,
+          })),
+  }));
+
+  // The apply-station heuristic reads whatever file the schema tracks
+  // progress in — the same file the progress table is rendered from, so the
+  // two can never disagree. `tracks` may point at a file the schema doesn't
+  // declare as an artifact, hence the standalone read as a last resort.
+  const tracksFile = schema?.apply?.tracks ?? 'tasks.md';
+  const trackedArtifact = artifacts.find(
+    (a) => a.plan.kind !== 'capabilities' && samePath(a.plan.file, tracksFile)
+  );
+  const tracksMd = trackedArtifact
+    ? trackedArtifact.markdown
+    : realBase
+      ? readArtifactSafely(realBase, tracksFile)
+      : null;
 
   const station = determineStation({
     changeDir,
-    hasProposal: proposalMd !== null,
-    tasksMd,
+    // Any declared artifact being present means drafting has started —
+    // keying this on `proposal.md` alone left every schema without a
+    // proposal artifact permanently parked at the `explore` station.
+    hasAnyArtifact: artifacts.some((a) => a.markdown !== null || (a.capabilityViews?.length ?? 0) > 0),
+    tracksMd,
     gatesFilenames: gatesFiles.map((f) => f.filename),
   });
 
@@ -98,13 +267,6 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
     emptySynthesisFiles,
     inconsistentSynthesisFiles,
   } = computeGateStatuses(gateIds, gatesFiles);
-
-  const capabilityViews: CapabilityView[] = capabilities.map((cap) => ({
-    slug: cap.slug,
-    displayName: resolveCapabilityDisplayName(proposalMd, cap.slug, cap.markdown),
-    requirements: cap.markdown !== null ? parseSpecRequirements(cap.markdown) : [],
-    rawMarkdown: cap.markdown,
-  }));
 
   // ── Content generator ────────────────────────────────────────────────
   //
@@ -131,10 +293,7 @@ export function renderChangeHtml(options: RenderChangeHtmlOptions): string {
   body.push(
     renderShell({
       changeName,
-      capabilityViews,
-      proposalMd,
-      designMd,
-      tasksMd,
+      artifacts,
       gatesFiles,
       emptySynthesisFiles,
       inconsistentSynthesisFiles,
@@ -299,8 +458,11 @@ interface CapabilitySpecFile {
   markdown: string | null;
 }
 
-function readCapabilitySpecs(realBase: string): CapabilitySpecFile[] {
-  const specsDirReal = resolveArtifactPath(realBase, 'specs');
+/** `specsDir` is the glob artifact's leading directory (`globRootOf`), not a
+ * hardcoded `specs` — a schema is free to declare the capability tree
+ * somewhere else, and the two would silently diverge if this assumed. */
+function readCapabilitySpecs(realBase: string, specsDir: string = 'specs'): CapabilitySpecFile[] {
+  const specsDirReal = resolveArtifactPath(realBase, specsDir);
   if (specsDirReal === null) return [];
 
   let entries: fs.Dirent[];
@@ -320,7 +482,7 @@ function readCapabilitySpecs(realBase: string): CapabilitySpecFile[] {
   // indistinguishable from one that never existed at all.
   return slugs.map((slug) => ({
     slug,
-    markdown: readArtifactSafely(realBase, path.join('specs', slug, 'spec.md')),
+    markdown: readArtifactSafely(realBase, path.join(specsDir, slug, 'spec.md')),
   }));
 }
 
@@ -380,8 +542,14 @@ function readGatesFiles(realBase: string): GatesFileEntry[] {
 
 export interface StationInput {
   changeDir: string;
-  hasProposal: boolean;
-  tasksMd: string | null;
+  /** True when ANY schema-declared artifact exists on disk — not "proposal.md
+   * exists". A schema without a proposal artifact (odoo-bugfix, odoo-refactor,
+   * odoo-trivial) would otherwise never leave the `explore` station no matter
+   * how much work had been done. */
+  hasAnyArtifact: boolean;
+  /** Content of the file the schema tracks progress in (`apply.tracks`,
+   * defaulting to `tasks.md`) — the checkbox source, whatever it is called. */
+  tracksMd: string | null;
   gatesFilenames: string[];
 }
 
@@ -394,10 +562,10 @@ export function determineStation(input: StationInput): LifecycleStation {
   );
   if (hasPostApplyEvidence) return 'verify';
 
-  const hasCheckedTask = input.tasksMd !== null && /-\s*\[[xX]\]/.test(input.tasksMd);
+  const hasCheckedTask = input.tracksMd !== null && /-\s*\[[xX]\]/.test(input.tracksMd);
   if (hasCheckedTask) return 'apply';
 
-  if (input.hasProposal) return 'propose';
+  if (input.hasAnyArtifact) return 'propose';
 
   return 'explore';
 }
@@ -669,27 +837,41 @@ interface CapabilityView {
 
 interface ShellInput {
   changeName: string;
-  capabilityViews: CapabilityView[];
-  proposalMd: string | null;
-  designMd: string | null;
-  tasksMd: string | null;
+  artifacts: RenderedArtifact[];
   gatesFiles: GatesFileEntry[];
   emptySynthesisFiles: string[];
   inconsistentSynthesisFiles: string[];
 }
 
 function renderShell(input: ShellInput): string {
+  // Sections follow the plan's order (the schema's declaration order), and
+  // the sidebar below is built from the same list — the tree and the main
+  // column cannot drift apart into different section sets.
+  const sections: string[] = [];
+  for (const art of input.artifacts) {
+    switch (art.plan.kind) {
+      case 'capabilities':
+        sections.push(...renderSpecsSections(art.capabilityViews ?? [], art.plan));
+        break;
+      case 'proposal':
+        sections.push(renderProposalSection(art.markdown, art.plan));
+        break;
+      case 'tracks':
+        sections.push(renderTasksSection(art.markdown, art.plan));
+        break;
+      default:
+        sections.push(renderGenericArtifactSection(art.markdown, art.plan));
+    }
+  }
+
   return [
     '<div class="spec-shell">',
     '  <button type="button" class="spec-drawer-toggle" aria-controls="spec-sidebar" aria-expanded="false">',
     '    ☰ 內容導覽',
     '  </button>',
-    renderSidebar(input.changeName, input.capabilityViews),
+    renderSidebar(input.changeName, input.artifacts),
     '  <main class="spec-main">',
-    renderProposalSection(input.proposalMd),
-    ...renderSpecsSections(input.capabilityViews),
-    renderTasksSection(input.tasksMd),
-    renderDesignSection(input.designMd),
+    ...sections,
     renderGateEvidenceSection(input.gatesFiles, input.emptySynthesisFiles, input.inconsistentSynthesisFiles),
     '  </main>',
     '</div>',
@@ -704,15 +886,20 @@ function scenarioId(reqId: string, index: number): string {
   return `${reqId}-s${index + 1}`;
 }
 
-function renderSidebar(changeName: string, capabilityViews: CapabilityView[]): string {
+function renderSidebar(changeName: string, artifacts: RenderedArtifact[]): string {
   const lines: string[] = [
     '  <nav class="spec-sidebar" id="spec-sidebar" aria-label="內容導覽樹">',
     `    <p class="spec-tree-title">${escapeHtml(changeName)}</p>`,
     `    <p class="spec-tree-legend">${escapeHtml(TREE_LEGEND_TEXT)}</p>`,
   ];
 
-  if (capabilityViews.length === 0) {
-    lines.push('    <p class="spec-missing">specs/ 未產出</p>');
+  const capabilityArtifact = artifacts.find((a) => a.plan.kind === 'capabilities');
+  const capabilityViews = capabilityArtifact?.capabilityViews ?? [];
+
+  // The "未產出" line belongs to a *declared* capability tree. A schema that
+  // declares no specs glob has nothing missing here, so it gets no line.
+  if (capabilityArtifact !== undefined && capabilityViews.length === 0) {
+    lines.push(`    <p class="spec-missing">${escapeHtml(globRootOf(capabilityArtifact.plan.file))}/ 未產出</p>`);
   } else {
     for (const cap of capabilityViews) {
       lines.push('    <details open class="spec-tree-node">');
@@ -746,14 +933,20 @@ function renderSidebar(changeName: string, capabilityViews: CapabilityView[]): s
     }
   }
 
-  // Block-level fallback links always present so proposal/tasks/design/gate
-  // evidence stay reachable from the tree even when specs/ is empty
-  // (conventions.md "specs 為零時" — the CLI keeps this even when specs
-  // exist, it's cheap and harmless).
+  // Block-level fallback links always present so every artifact section and
+  // the gate evidence stay reachable from the tree even when the capability
+  // tree is empty (conventions.md "specs 為零時" — the CLI keeps this even
+  // when specs exist, it's cheap and harmless). The list is the schema's
+  // declared artifacts, so it can never advertise a section the main column
+  // doesn't render, nor omit one it does.
   lines.push('    <ul>');
-  lines.push('      <li><a class="spec-tree-link" href="#proposal" data-target="proposal">Proposal</a></li>');
-  lines.push('      <li><a class="spec-tree-link" href="#tasks" data-target="tasks">Tasks</a></li>');
-  lines.push('      <li><a class="spec-tree-link" href="#design" data-target="design">Design</a></li>');
+  for (const art of artifacts) {
+    if (art.plan.kind === 'capabilities') continue; // covered by the capability tree above
+    const id = sectionIdFor(art.plan);
+    lines.push(
+      `      <li><a class="spec-tree-link" href="#${escapeHtml(id)}" data-target="${escapeHtml(id)}">${escapeHtml(art.plan.title)}</a></li>`
+    );
+  }
   lines.push(
     '      <li><a class="spec-tree-link" href="#gate-evidence" data-target="gate-evidence">Gate 證據</a></li>'
   );
@@ -807,12 +1000,23 @@ function renderMarkdownRaw(markdown: string): string {
   return html.join('\n');
 }
 
-function renderProposalSection(proposalMd: string | null): string {
+/**
+ * Section anchor and comment-layer `data-review-key`, derived from the
+ * artifact id. For spec-driven this yields exactly `proposal` / `specs` /
+ * `design` / `tasks` — the same ids this renderer hardcoded before, so saved
+ * comments and 已審 checkboxes survive the switch to schema-derived plans.
+ */
+function sectionIdFor(plan: PlannedArtifact): string {
+  return sanitizeId(plan.id, 'artifact');
+}
+
+function renderProposalSection(proposalMd: string | null, plan: PlannedArtifact): string {
+  const id = sectionIdFor(plan);
   if (proposalMd === null) {
     return [
-      '    <section id="proposal" class="spec-card">',
-      sectionHeading('Proposal', 'proposal', 'Proposal'),
-      '      <div class="spec-missing">proposal.md 未產出</div>',
+      `    <section id="${id}" class="spec-card">`,
+      sectionHeading(escapeHtml(plan.title), id, plan.title),
+      `      <div class="spec-missing">${escapeHtml(plan.file)} 未產出</div>`,
       '    </section>',
     ].join('\n');
   }
@@ -834,24 +1038,31 @@ function renderProposalSection(proposalMd: string | null): string {
   }
 
   return [
-    '    <section id="proposal" class="spec-card">',
-    sectionHeading('Proposal', 'proposal', 'Proposal'),
+    `    <section id="${id}" class="spec-card">`,
+    sectionHeading(escapeHtml(plan.title), id, plan.title),
     ...body,
     '    </section>',
   ].join('\n');
 }
 
-function renderDesignSection(designMd: string | null): string {
-  if (designMd === null) {
+/**
+ * The renderer for every artifact with no special structure of its own:
+ * design.md, but equally analysis.md, issue.md, verify-report.md, memo.md.
+ * Level-2 sections become collapsibles; anything that doesn't parse falls
+ * through `renderMarkdownRaw` to escaped raw text, so no content is dropped.
+ */
+function renderGenericArtifactSection(markdown: string | null, plan: PlannedArtifact): string {
+  const id = sectionIdFor(plan);
+  if (markdown === null) {
     return [
-      '    <section id="design" class="spec-card">',
-      sectionHeading('Design', 'design', 'Design'),
-      '      <div class="spec-missing">design.md 未產出</div>',
+      `    <section id="${id}" class="spec-card">`,
+      sectionHeading(escapeHtml(plan.title), id, plan.title),
+      `      <div class="spec-missing">${escapeHtml(plan.file)} 未產出</div>`,
       '    </section>',
     ].join('\n');
   }
 
-  const sections = splitLevel2Sections(designMd);
+  const sections = splitLevel2Sections(markdown);
   const body: string[] = [];
   for (const section of sections) {
     const rendered = renderMarkdownRaw(section.body);
@@ -862,18 +1073,22 @@ function renderDesignSection(designMd: string | null): string {
     body.push('      </details>');
   }
 
-  return ['    <section id="design" class="spec-card">', sectionHeading('Design', 'design', 'Design'), ...body, '    </section>'].join(
-    '\n'
-  );
+  return [
+    `    <section id="${id}" class="spec-card">`,
+    sectionHeading(escapeHtml(plan.title), id, plan.title),
+    ...body,
+    '    </section>',
+  ].join('\n');
 }
 
-function renderSpecsSections(capabilityViews: CapabilityView[]): string[] {
+function renderSpecsSections(capabilityViews: CapabilityView[], plan: PlannedArtifact): string[] {
   if (capabilityViews.length === 0) {
+    const id = sectionIdFor(plan);
     return [
       [
-        '    <section id="specs" class="spec-card">',
-        '      <h3>Specs</h3>',
-        '      <div class="spec-missing">specs/ 未產出</div>',
+        `    <section id="${id}" class="spec-card">`,
+        `      <h3>${escapeHtml(plan.title)}</h3>`,
+        `      <div class="spec-missing">${escapeHtml(globRootOf(plan.file))}/ 未產出</div>`,
         '    </section>',
       ].join('\n'),
     ];
@@ -974,12 +1189,15 @@ function renderCapabilitySection(cap: CapabilityView): string {
   ].join('\n');
 }
 
-function renderTasksSection(tasksMd: string | null): string {
+/** Renders the schema's `apply.tracks` file — the one with the checkboxes —
+ * whatever it is named. */
+function renderTasksSection(tasksMd: string | null, plan: PlannedArtifact): string {
+  const id = sectionIdFor(plan);
   if (tasksMd === null) {
     return [
-      '    <section id="tasks" class="spec-card">',
-      sectionHeading('Tasks', 'tasks', 'Tasks'),
-      '      <div class="spec-missing">tasks.md 未產出</div>',
+      `    <section id="${id}" class="spec-card">`,
+      sectionHeading(escapeHtml(plan.title), id, plan.title),
+      `      <div class="spec-missing">${escapeHtml(plan.file)} 未產出</div>`,
       '    </section>',
     ].join('\n');
   }
@@ -987,9 +1205,9 @@ function renderTasksSection(tasksMd: string | null): string {
   const groups = parseTaskGroups(tasksMd);
   if (groups.length === 0) {
     return [
-      '    <section id="tasks" class="spec-card">',
-      sectionHeading('Tasks', 'tasks', 'Tasks'),
-      '      <div class="spec-missing">tasks.md 內沒有解析出任何群組</div>',
+      `    <section id="${id}" class="spec-card">`,
+      sectionHeading(escapeHtml(plan.title), id, plan.title),
+      `      <div class="spec-missing">${escapeHtml(plan.file)} 內沒有解析出任何群組</div>`,
       '    </section>',
     ].join('\n');
   }
@@ -1008,7 +1226,12 @@ function renderTasksSection(tasksMd: string | null): string {
     body.push(...renderTaskGroup(group));
   }
 
-  return ['    <section id="tasks" class="spec-card">', sectionHeading('Tasks', 'tasks', 'Tasks'), ...body, '    </section>'].join('\n');
+  return [
+    `    <section id="${id}" class="spec-card">`,
+    sectionHeading(escapeHtml(plan.title), id, plan.title),
+    ...body,
+    '    </section>',
+  ].join('\n');
 }
 
 function renderTaskGroup(group: TaskGroup): string[] {

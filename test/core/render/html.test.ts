@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   renderChangeHtml,
   determineStation,
+  artifactPlan,
   collectGateIdsForStation,
   computeGateStatuses,
   type GatesFileEntry,
@@ -283,21 +284,21 @@ describe('renderChangeHtml — determinism', () => {
 });
 
 describe('determineStation', () => {
-  it('returns explore when there is no proposal at all', () => {
+  it('returns explore when no declared artifact exists at all', () => {
     expect(
-      determineStation({ changeDir: '/x/openspec/changes/foo', hasProposal: false, tasksMd: null, gatesFilenames: [] })
+      determineStation({ changeDir: '/x/openspec/changes/foo', hasAnyArtifact: false, tracksMd: null, gatesFilenames: [] })
     ).toBe('explore');
   });
 
-  it('returns propose when only a proposal exists and tasks are unchecked or absent', () => {
+  it('returns propose when a declared artifact exists and the tracked file is unchecked or absent', () => {
     expect(
-      determineStation({ changeDir: '/x/openspec/changes/foo', hasProposal: true, tasksMd: null, gatesFilenames: [] })
+      determineStation({ changeDir: '/x/openspec/changes/foo', hasAnyArtifact: true, tracksMd: null, gatesFilenames: [] })
     ).toBe('propose');
     expect(
       determineStation({
         changeDir: '/x/openspec/changes/foo',
-        hasProposal: true,
-        tasksMd: '- [ ] 1.1 todo',
+        hasAnyArtifact: true,
+        tracksMd: '- [ ] 1.1 todo',
         gatesFilenames: [],
       })
     ).toBe('propose');
@@ -307,8 +308,8 @@ describe('determineStation', () => {
     expect(
       determineStation({
         changeDir: '/x/openspec/changes/foo',
-        hasProposal: true,
-        tasksMd: '- [x] 1.1 done\n- [ ] 1.2 todo',
+        hasAnyArtifact: true,
+        tracksMd: '- [x] 1.1 done\n- [ ] 1.2 todo',
         gatesFilenames: ['synthesis-propose.json'],
       })
     ).toBe('apply');
@@ -318,8 +319,8 @@ describe('determineStation', () => {
     expect(
       determineStation({
         changeDir: '/x/openspec/changes/foo',
-        hasProposal: true,
-        tasksMd: '- [x] 1.1 done',
+        hasAnyArtifact: true,
+        tracksMd: '- [x] 1.1 done',
         gatesFilenames: ['synthesis-verify.json'],
       })
     ).toBe('verify');
@@ -329,8 +330,8 @@ describe('determineStation', () => {
     expect(
       determineStation({
         changeDir: '/x/openspec/changes/archive/2026-01-01-foo',
-        hasProposal: true,
-        tasksMd: '- [x] 1.1 done',
+        hasAnyArtifact: true,
+        tracksMd: '- [x] 1.1 done',
         gatesFilenames: [],
       })
     ).toBe('archive');
@@ -695,5 +696,165 @@ describe('renderChangeHtml — .gates file vanishing between readdir and read do
         }
       }
     );
+  });
+});
+
+// ── schema-derived artifact plan ─────────────────────────────────────────
+//
+// Regression cover for the "spec-viewer is schema-blind" bug: the renderer
+// used to read three literal filenames (proposal.md / design.md / tasks.md),
+// so a change on any other schema rendered as four "未產出" cards while its
+// real artifacts sat untouched in the change directory — a tool failure with
+// the exact appearance of "the work was never done".
+
+function odooRefactorSchema(): SchemaYaml {
+  return {
+    name: 'odoo-refactor',
+    version: 1,
+    artifacts: [
+      { id: 'analysis', generates: 'analysis.md', description: '', template: 'a.md', requires: [] },
+      { id: 'backend', generates: 'backend-plan.md', description: '', template: 'b.md', requires: [] },
+      { id: 'frontend', generates: 'frontend-plan.md', description: '', template: 'f.md', requires: [] },
+      { id: 'verified', generates: 'verify-report.md', description: '', template: 'v.md', requires: [] },
+    ],
+    apply: { requires: ['backend', 'frontend'], tracks: 'backend-plan.md' },
+  } as unknown as SchemaYaml;
+}
+
+function specDrivenSchema(): SchemaYaml {
+  return {
+    name: 'spec-driven',
+    version: 1,
+    artifacts: [
+      { id: 'proposal', generates: 'proposal.md', description: '', template: 'p.md', requires: [] },
+      { id: 'specs', generates: 'specs/**/*.md', description: '', template: 's.md', requires: [] },
+      { id: 'design', generates: 'design.md', description: '', template: 'd.md', requires: [] },
+      { id: 'tasks', generates: 'tasks.md', description: '', template: 't.md', requires: [] },
+    ],
+    apply: { requires: ['tasks'], tracks: 'tasks.md' },
+  } as unknown as SchemaYaml;
+}
+
+describe('artifactPlan', () => {
+  it('derives the list from schema.artifacts[].generates, in declaration order', () => {
+    expect(artifactPlan(odooRefactorSchema()).map((a) => a.file)).toEqual([
+      'analysis.md',
+      'backend-plan.md',
+      'frontend-plan.md',
+      'verify-report.md',
+    ]);
+  });
+
+  it('marks the apply.tracks file as the progress artifact, not whatever is named "tasks"', () => {
+    const plan = artifactPlan(odooRefactorSchema());
+    expect(plan.find((a) => a.file === 'backend-plan.md')?.kind).toBe('tracks');
+    expect(plan.filter((a) => a.kind === 'tracks')).toHaveLength(1);
+  });
+
+  it('titles sections from the filename, so the page matches the directory listing', () => {
+    expect(artifactPlan(odooRefactorSchema()).map((a) => a.title)).toEqual([
+      'Analysis',
+      'Backend Plan',
+      'Frontend Plan',
+      'Verify Report',
+    ]);
+  });
+
+  it('falls back to the spec-driven list when the schema is unresolvable', () => {
+    expect(artifactPlan(null).map((a) => a.file)).toEqual([
+      'proposal.md',
+      'specs/**/*.md',
+      'design.md',
+      'tasks.md',
+    ]);
+  });
+
+  it('treats an empty artifact list as an unusable declaration, not as "render nothing"', () => {
+    const empty = { name: 'x', version: 1, artifacts: [] } as unknown as SchemaYaml;
+    expect(artifactPlan(empty).map((a) => a.id)).toEqual(['proposal', 'specs', 'design', 'tasks']);
+  });
+});
+
+describe('renderChangeHtml — non-spec-driven schema (odoo-refactor shape)', () => {
+  const changeDir = path.join(FIXTURES_DIR, 'refactor-change');
+  const html = renderChangeHtml({
+    changeDir,
+    changeName: 'refactor-change',
+    schema: odooRefactorSchema(),
+  });
+
+  it('renders the content of artifacts whose names are not proposal/design/tasks', () => {
+    expect(html).toContain('跨公司報表重複計算');
+    expect(html).toContain('migration script 由 line 回填 move');
+    expect(html).toContain('樞紐分析改以表頭欄位分組');
+  });
+
+  it('gives each declared artifact a section keyed by its artifact id', () => {
+    expect(html).toContain('id="analysis"');
+    expect(html).toContain('id="backend"');
+    expect(html).toContain('id="frontend"');
+    expect(html).toContain('data-review-key="analysis"');
+  });
+
+  it('does not mark present artifacts as 未產出', () => {
+    expect(html).not.toContain('analysis.md 未產出');
+    expect(html).not.toContain('backend-plan.md 未產出');
+    expect(html).not.toContain('frontend-plan.md 未產出');
+  });
+
+  it('still marks a declared-but-absent artifact as 未產出', () => {
+    expect(html).toContain('verify-report.md 未產出');
+  });
+
+  it('says nothing about artifacts this schema never declares', () => {
+    // The mirror image of the original bug: announcing that something the
+    // workflow never produces is "未產出" reads as "this change is missing
+    // work" just as strongly as hiding what it did produce.
+    expect(html).not.toContain('specs/ 未產出');
+    expect(html).not.toContain('proposal.md 未產出');
+    expect(html).not.toContain('design.md 未產出');
+    expect(html).not.toContain('tasks.md 未產出');
+    expect(html).not.toContain('id="proposal"');
+    expect(html).not.toContain('id="design"');
+    expect(html).not.toContain('id="tasks"');
+  });
+
+  it('renders the progress table from apply.tracks and infers the apply station', () => {
+    expect(html).toContain('1 / 2 群組完成（50%）');
+    expect(html).toContain('<li class="station current">apply</li>');
+  });
+
+  it('builds the sidebar links from the same declared set as the main column', () => {
+    expect(html).toContain('data-target="analysis"');
+    expect(html).toContain('data-target="backend"');
+    expect(html).toContain('data-target="verified"');
+    expect(html).not.toMatch(/data-target="proposal"/);
+  });
+
+  it('stays byte-identical across repeated renders', () => {
+    const again = renderChangeHtml({ changeDir, changeName: 'refactor-change', schema: odooRefactorSchema() });
+    expect(again).toBe(html);
+  });
+});
+
+describe('renderChangeHtml — spec-driven section ids are unchanged', () => {
+  // The comment layer persists notes and 已審 checkboxes against these keys
+  // in localStorage. Deriving ids from artifact ids happens to reproduce the
+  // previously-hardcoded strings for spec-driven — this nails that down so a
+  // future refactor cannot silently orphan everyone's saved review state.
+  const changeDir = path.join(FIXTURES_DIR, 'complete-change');
+  const html = renderChangeHtml({ changeDir, changeName: 'complete-change', schema: specDrivenSchema() });
+
+  it('keeps proposal / specs / design / tasks as section ids and review keys', () => {
+    for (const key of ['proposal', 'design', 'tasks']) {
+      expect(html).toContain(`id="${key}"`);
+      expect(html).toContain(`data-review-key="${key}"`);
+    }
+    expect(html).toContain('id="specs-widget-export"');
+    expect(html).toContain('id="gate-evidence"');
+  });
+
+  it('renders the capability tree from the declared specs glob', () => {
+    expect(html).toContain('id="req-widget-export-1"');
   });
 });
