@@ -9,6 +9,7 @@ import {
   validateSchemaName,
   ChangeMetadataError,
   readRetireCapabilitiesMarker,
+  readSkipSpecsMarker,
 } from '../../src/utils/change-metadata.js';
 import { ChangeMetadataSchema } from '../../src/core/change-metadata/index.js';
 
@@ -413,5 +414,131 @@ describe('boolean marker reasons', () => {
     // The name is still recognisable, so the author can find what they typed.
     expect(marker.invalidReason).toContain("unknown schema 'ghost?[31m-schema'");
     expect(marker.invalidReason).not.toMatch(/[\u0000-\u001f\u007f]/);
+  });
+});
+
+// Regression: the marker's schema check must resolve against the caller's
+// project root, with that project's plugins loaded. Both halves are needed and
+// each fails independently - a wrong root finds no plugins at all, and the
+// right root without the plugins argument still lists only built-in schemas.
+// A project-local schema under openspec/schemas/ cannot stand in here:
+// listSchemas contributes those without any plugins argument, so such a fixture
+// passes even with the defect fully present.
+describe('boolean markers resolve schemas against the caller project root', () => {
+  let tempDir: string;
+  let projectRoot: string;
+  let changeDir: string;
+
+  const PLUGIN_NAME = 'fixture-plugin';
+  const PLUGIN_SCHEMA = 'fixture-schema';
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-marker-root-'));
+    projectRoot = path.join(tempDir, 'project');
+
+    // Changes live outside the project tree, as a shared spec store does. The
+    // <changeDir>/../../.. derivation cannot reach projectRoot from here.
+    changeDir = path.join(tempDir, 'store', 'changes', 'a-change');
+    await fs.mkdir(changeDir, { recursive: true });
+
+    const pluginDir = path.join(projectRoot, 'openspec', 'plugins', PLUGIN_NAME);
+    const schemaDir = path.join(pluginDir, 'schemas', PLUGIN_SCHEMA);
+    await fs.mkdir(schemaDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(projectRoot, 'openspec', 'config.yaml'),
+      `changesDir: "../store/changes"\nplugins:\n  - ${PLUGIN_NAME}\n`,
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(pluginDir, 'plugin.yaml'),
+      `name: ${PLUGIN_NAME}\nversion: 1.0.0\nschemas:\n  - ${PLUGIN_SCHEMA}\n`,
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(schemaDir, 'schema.yaml'),
+      [
+        `name: ${PLUGIN_SCHEMA}`,
+        'version: 1',
+        'description: Fixture schema provided by a plugin',
+        'artifacts:',
+        '  - id: notes',
+        '    generates: notes.md',
+        '    description: Fixture artifact',
+        '    template: notes.md',
+        '',
+      ].join('\n'),
+      'utf-8'
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeMarker(schema: string, key = 'skip_specs'): Promise<void> {
+    await fs.writeFile(
+      path.join(changeDir, '.openspec.yaml'),
+      `schema: ${schema}\n${key}: true\n`,
+      'utf-8'
+    );
+  }
+
+  it('honors a marker naming a plugin schema when the project root is passed', async () => {
+    await writeMarker(PLUGIN_SCHEMA);
+
+    const marker = readSkipSpecsMarker(changeDir, projectRoot);
+
+    expect(marker.invalidReason).toBeUndefined();
+    expect(marker.declared).toBe(true);
+  });
+
+  it('applies the same resolution to the retire_capabilities marker', async () => {
+    await writeMarker(PLUGIN_SCHEMA, 'retire_capabilities');
+
+    const marker = readRetireCapabilitiesMarker(changeDir, projectRoot);
+
+    expect(marker.invalidReason).toBeUndefined();
+    expect(marker.declared).toBe(true);
+  });
+
+  it('still refuses a schema no source provides, and names it', async () => {
+    await writeMarker('no-such-schema');
+
+    const marker = readSkipSpecsMarker(changeDir, projectRoot);
+
+    expect(marker.declared).toBe(false);
+    expect(marker.invalidReason).toContain("unknown schema 'no-such-schema'");
+  });
+
+  // The derivation stays the fallback, so untouched callers on the canonical
+  // layout keep behaving exactly as before.
+  it('derives the root from the change directory when none is passed', async () => {
+    const canonicalChangeDir = path.join(
+      projectRoot,
+      'openspec',
+      'changes',
+      'canonical'
+    );
+    await fs.mkdir(canonicalChangeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(canonicalChangeDir, '.openspec.yaml'),
+      `schema: ${PLUGIN_SCHEMA}\nskip_specs: true\n`,
+      'utf-8'
+    );
+
+    const marker = readSkipSpecsMarker(canonicalChangeDir);
+
+    expect(marker.invalidReason).toBeUndefined();
+    expect(marker.declared).toBe(true);
+  });
+
+  it('rejects a plugin schema when no root reaches the plugin', async () => {
+    await writeMarker(PLUGIN_SCHEMA);
+
+    const marker = readSkipSpecsMarker(changeDir);
+
+    expect(marker.declared).toBe(false);
+    expect(marker.invalidReason).toContain(`unknown schema '${PLUGIN_SCHEMA}'`);
   });
 });

@@ -238,14 +238,21 @@ export type SkipSpecsMarker = MetadataMarker;
  * listSchemas membership check, AND the schema itself loads via resolveSchema
  * (a schema.yaml that exists but does not parse fails status just the same).
  * Validate and archive must never honor metadata the rest of the CLI rejects,
- * in either direction. The project root for schema resolution is derived from
- * changeDir exactly like resolveSchemaForChange (changeDir is
- * <root>/openspec/changes/<name> for every root type, including store roots).
+ * in either direction - so every caller must resolve the marker against the
+ * same project root, or a marker honored by validate is refused by archive.
+ * Pass `projectRoot` whenever it is known; callers that already resolved a root
+ * (every validate and archive entry point) always know it. Only when it is
+ * omitted is the root derived from changeDir as <changeDir>/../../.., which
+ * holds for the canonical <root>/openspec/changes/<name> layout but not for a
+ * project whose config points changesDir outside the project tree.
  * Missing metadata means "not declared"; a marker that cannot be honored
  * yields invalidReason so callers can say why.
  */
-export function readSkipSpecsMarker(changeDir: string): MetadataMarker {
-  return readBooleanMarker(changeDir, 'skip_specs');
+export function readSkipSpecsMarker(
+  changeDir: string,
+  projectRoot?: string
+): MetadataMarker {
+  return readBooleanMarker(changeDir, 'skip_specs', projectRoot);
 }
 
 /**
@@ -258,8 +265,11 @@ export function readSkipSpecsMarker(changeDir: string): MetadataMarker {
  * (#1302). Declared rather than inferred because the delete is recoverable only
  * from git, so it is the author's call.
  */
-export function readRetireCapabilitiesMarker(changeDir: string): MetadataMarker {
-  return readBooleanMarker(changeDir, 'retire_capabilities');
+export function readRetireCapabilitiesMarker(
+  changeDir: string,
+  projectRoot?: string
+): MetadataMarker {
+  return readBooleanMarker(changeDir, 'retire_capabilities', projectRoot);
 }
 
 /**
@@ -282,7 +292,8 @@ function unhonorable(reason: string): MetadataMarker {
 
 function readBooleanMarker(
   changeDir: string,
-  key: 'skip_specs' | 'retire_capabilities'
+  key: 'skip_specs' | 'retire_capabilities',
+  projectRootOverride?: string
 ): MetadataMarker {
   let raw: string;
   try {
@@ -322,12 +333,19 @@ function readBooleanMarker(
     // readChangeMetadata (which rejects names like 'spec-driven.yaml' that
     // resolveSchema alone would normalize and accept); resolveSchema then
     // proves the schema actually parses. Any failure fails closed.
+    //
+    // The plugins argument is what makes this mirror readChangeMetadata rather
+    // than merely resemble it: listSchemas contributes plugin-provided schemas
+    // only when asked, so omitting it rejects every plugin schema by name while
+    // resolveSchema, `schema which`, and readChangeMetadata all resolve it.
     try {
-      const projectRoot = path.resolve(changeDir, '../../..');
-      if (!listSchemas(projectRoot).includes(result.data.schema)) {
+      const projectRoot =
+        projectRootOverride ?? path.resolve(changeDir, '../../..');
+      const loadedPlugins = getLoadedPlugins(projectRoot);
+      if (!listSchemas(projectRoot, loadedPlugins).includes(result.data.schema)) {
         return unhonorable(`schema: unknown schema '${result.data.schema}'`);
       }
-      resolveSchema(result.data.schema, projectRoot);
+      resolveSchema(result.data.schema, projectRoot, loadedPlugins);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return unhonorable(message);

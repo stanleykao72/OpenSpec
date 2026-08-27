@@ -93,7 +93,16 @@ export class Validator {
     return this.createReport(issues);
   }
 
-  async validateChange(filePath: string): Promise<ValidationReport> {
+  /**
+   * `options.projectRoot` resolves the skip_specs marker's schema name. Pass it
+   * wherever it is known: without it the root is derived from the change
+   * directory, which is wrong for a project whose changesDir points outside the
+   * project tree, and a marker this pass refuses is a marker archive refuses too.
+   */
+  async validateChange(
+    filePath: string,
+    options: { projectRoot?: string } = {}
+  ): Promise<ValidationReport> {
     const issues: ValidationIssue[] = [];
     const changeName = this.extractNameFromPath(filePath);
     try {
@@ -105,7 +114,7 @@ export class Validator {
 
       const result = ChangeSchema.safeParse(change);
 
-      const marker = readSkipSpecsMarker(changeDir);
+      const marker = readSkipSpecsMarker(changeDir, options.projectRoot);
       if (marker.invalidReason) {
         issues.push({ level: 'ERROR', path: METADATA_FILENAME, message: this.formatInvalidMarkerMessage(marker.invalidReason) });
       }
@@ -116,7 +125,14 @@ export class Validator {
         // conflict is validateChangeDeltaSpecs's job, and every caller of
         // this proposal-level pass (archive's non-blocking warnings) pairs
         // it with that gate.
-        if (marker.declared) {
+        //
+        // An unhonorable marker is dropped for the same reason a declared one
+        // is: the author set skip_specs, and CHANGE_NO_DELTAS ends by telling
+        // them to set it. The marker ERROR above still fires, so the report
+        // stays invalid and still names the real fix. Kept in step with
+        // validateChangeDeltaSpecs - the two passes disagreeing about one
+        // marker is the failure mode this whole area exists to prevent.
+        if (marker.declared || marker.invalidReason) {
           zodIssues = zodIssues.filter(
             issue => !issue.message.startsWith(VALIDATION_MESSAGES.CHANGE_NO_DELTAS)
           );
@@ -154,10 +170,17 @@ export class Validator {
    * apply (#1477). When `options.projectRoot` is given, the schema's tracked
    * task files are checked for ambiguous numbering (#1520). Omitting either
    * option keeps existing library and archive callers behaving as before.
+   *
+   * `options.markerProjectRoot` is the root the skip_specs marker's schema name
+   * resolves against, defaulting to `options.projectRoot`. It exists separately
+   * because the presence of `projectRoot` is what enables the task-numbering
+   * pass: a caller that deliberately skips that pass (archive, gate checks)
+   * still needs the marker resolved against the real root, and must not have to
+   * opt into an unrelated check to get it.
    */
   async validateChangeDeltaSpecs(
     changeDir: string,
-    options: { mainSpecsDir?: string; projectRoot?: string } = {}
+    options: { mainSpecsDir?: string; projectRoot?: string; markerProjectRoot?: string } = {}
   ): Promise<ValidationReport> {
     const issues: ValidationIssue[] = [];
     const specsDir = path.join(changeDir, 'specs');
@@ -421,7 +444,10 @@ export class Validator {
       });
     }
 
-    const marker = readSkipSpecsMarker(changeDir);
+    const marker = readSkipSpecsMarker(
+      changeDir,
+      options.markerProjectRoot ?? options.projectRoot
+    );
     if (marker.invalidReason) {
       issues.push({ level: 'ERROR', path: METADATA_FILENAME, message: this.formatInvalidMarkerMessage(marker.invalidReason) });
     }
@@ -453,7 +479,14 @@ export class Validator {
     if (totalDeltas === 0 && !hasRootLevelSpec) {
       if (skipSpecs && !specsDirHasFiles) {
         issues.push({ level: 'INFO', path: 'file', message: VALIDATION_MESSAGES.CHANGE_SKIP_SPECS_ACCEPTED });
-      } else if (!skipSpecs) {
+      } else if (!skipSpecs && !marker.invalidReason) {
+        // An unhonorable marker means the author already set skip_specs, and
+        // CHANGE_NO_DELTAS ends by telling them to set it - the two errors
+        // together prescribe contradictory actions. The marker error above
+        // still fires (so the report stays invalid) and the Next steps footer
+        // already names both routes: fix the metadata, or drop the marker and
+        // add deltas. Mirrors the filter validateChange applies for a declared
+        // marker.
         issues.push({ level: 'ERROR', path: 'file', message: this.enrichTopLevelError('change', VALIDATION_MESSAGES.CHANGE_NO_DELTAS) });
       }
     }

@@ -177,7 +177,9 @@ export class PipelineRunner {
     const preGateResults: GateCheckResult[] = [];
 
     for (const gate of preGateInputs) {
-      const result = await gateChecker.checkGate(gate, this.changeDir);
+      const result = await gateChecker.checkGate(gate, this.changeDir, {
+        projectRoot: this.projectRoot,
+      });
       preGateResults.push(result);
     }
 
@@ -269,7 +271,9 @@ export class PipelineRunner {
     const postGateResults: GateCheckResult[] = [];
 
     for (const gate of postGateInputsFiltered) {
-      const result = await gateChecker.checkGate(gate, this.changeDir);
+      const result = await gateChecker.checkGate(gate, this.changeDir, {
+        projectRoot: this.projectRoot,
+      });
       postGateResults.push(result);
     }
 

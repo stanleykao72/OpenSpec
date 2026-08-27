@@ -340,7 +340,16 @@ export class GateChecker {
   /**
    * Unified gate check dispatcher.
    */
-  async checkGate(gate: GateInput, changeDir: string): Promise<GateCheckResult> {
+  /**
+   * `options.projectRoot` resolves the skip_specs marker's schema name during
+   * the validate-delta-specs gate. Without it the root is derived from
+   * changeDir, which is wrong whenever changesDir points outside the project.
+   */
+  async checkGate(
+    gate: GateInput,
+    changeDir: string,
+    options: { projectRoot?: string } = {}
+  ): Promise<GateCheckResult> {
     switch (gate.check) {
       case 'capability-coverage': {
         const result = this.checkCapabilityCoverage(changeDir);
@@ -384,7 +393,9 @@ export class GateChecker {
 
       case 'validate-delta-specs': {
         const validator = new Validator();
-        const report = await validator.validateChangeDeltaSpecs(changeDir);
+        const report = await validator.validateChangeDeltaSpecs(changeDir, {
+          markerProjectRoot: options.projectRoot,
+        });
         return {
           id: gate.id,
           description: 'Validate delta specs: all delta spec files pass validation',
