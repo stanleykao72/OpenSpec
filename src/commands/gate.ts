@@ -106,7 +106,7 @@ export class GateCommand {
     const results: Array<GateCheckResult & { severity: string; prompt?: string }> = [];
 
     for (const gate of phaseGates) {
-      const result = await gateChecker.checkGate(gate, changeDir);
+      const result = await gateChecker.checkGate(gate, changeDir, { projectRoot });
       results.push({
         ...result,
         severity: gate.severity,

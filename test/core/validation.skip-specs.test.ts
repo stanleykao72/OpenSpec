@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { promises as fs } from 'fs';
+import { promises as fs, promises as fsPromises } from 'fs';
+import os from 'os';
 import path from 'path';
 import { Validator } from '../../src/core/validation/validator.js';
+import { GateChecker } from '../../src/core/validation/gate-checker.js';
 
 const PROPOSAL = `# Test Change
 
@@ -154,7 +156,9 @@ describe('Validator skip_specs handling', () => {
     expect(report.valid).toBe(false);
     const msg = report.issues.map(i => i.message).join('\n');
     expect(msg).toContain('skip_specs is set but .openspec.yaml is not valid change metadata');
-    expect(msg).toContain('Change must have at least one delta');
+    // The author already set skip_specs, so the no-deltas error - which ends
+    // by telling them to set it - would prescribe the action they took.
+    expect(msg).not.toContain('set "skip_specs: true"');
   });
 
   it('does not honor skip_specs when the schema does not resolve', async () => {
@@ -173,7 +177,9 @@ describe('Validator skip_specs handling', () => {
     const msg = report.issues.map(i => i.message).join('\n');
     expect(msg).toContain('skip_specs is set but .openspec.yaml is not valid change metadata');
     expect(msg).toContain("unknown schema 'does-not-exist'");
-    expect(msg).toContain('Change must have at least one delta');
+    // The author already set skip_specs, so the no-deltas error - which ends
+    // by telling them to set it - would prescribe the action they took.
+    expect(msg).not.toContain('set "skip_specs: true"');
   });
 
   it('honors skip_specs when the marker names a project-local schema', async () => {
@@ -331,7 +337,7 @@ describe('Validator skip_specs handling', () => {
     expect(msg).toContain('cannot be read');
   });
 
-  it('validateChange keeps the no-deltas error when the marker names an unknown schema', async () => {
+  it('validateChange drops the no-deltas error when the marker names an unknown schema', async () => {
     await fs.writeFile(path.join(testDir, 'proposal.md'), PROPOSAL);
     await fs.writeFile(
       path.join(testDir, '.openspec.yaml'),
@@ -343,11 +349,13 @@ describe('Validator skip_specs handling', () => {
 
     expect(report.valid).toBe(false);
     const msg = report.issues.map(i => i.message).join('\n');
-    expect(msg).toContain('Change must have at least one delta');
+    // Both validate passes must agree about one marker; disagreeing is the
+    // failure mode this area exists to prevent.
+    expect(msg).not.toContain('Change must have at least one delta');
     expect(msg).toContain("unknown schema 'does-not-exist'");
   });
 
-  it('validateChange keeps the no-deltas error when the marker metadata is invalid', async () => {
+  it('validateChange drops the no-deltas error when the marker metadata is invalid', async () => {
     await fs.writeFile(path.join(testDir, 'proposal.md'), PROPOSAL);
     await fs.writeFile(path.join(testDir, '.openspec.yaml'), 'skip_specs: true\n');
 
@@ -356,7 +364,7 @@ describe('Validator skip_specs handling', () => {
 
     expect(report.valid).toBe(false);
     const msg = report.issues.map(i => i.message).join('\n');
-    expect(msg).toContain('Change must have at least one delta');
+    expect(msg).not.toContain('Change must have at least one delta');
     // Both validate paths explain why the marker was not honored.
     expect(msg).toContain('skip_specs is set but .openspec.yaml is not valid change metadata');
   });
@@ -449,5 +457,134 @@ describe('Validator skip_specs handling', () => {
     expect(report.valid).toBe(true);
     const msg = report.issues.map(i => i.message).join('\n');
     expect(msg).not.toContain('Change must have at least one delta');
+  });
+});
+
+describe('Validator skip_specs contradictory advice', () => {
+  const testDir = path.join(process.cwd(), 'test-validation-skip-specs-advice-tmp');
+
+  beforeEach(async () => {
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(testDir, { recursive: true, force: true });
+  });
+
+  // The zero-delta error ends by telling the author to set skip_specs: true.
+  // Emitting it alongside "skip_specs is set but ... not honored" prescribes
+  // the one action the author already took, and points away from the real fix.
+  it('does not tell the author to set a marker they already set', async () => {
+    await fs.writeFile(
+      path.join(testDir, '.openspec.yaml'),
+      'schema: definitely-not-a-schema\nskip_specs: true\n'
+    );
+
+    const validator = new Validator();
+    const report = await validator.validateChangeDeltaSpecs(testDir);
+
+    const msg = report.issues.map(i => i.message).join('\n');
+    expect(msg).toContain('is not valid change metadata');
+    expect(msg).not.toContain('set "skip_specs: true"');
+    // Suppressing the advice must not suppress the failure.
+    expect(report.valid).toBe(false);
+    expect(report.issues.some(i => i.level === 'ERROR')).toBe(true);
+  });
+});
+
+// The marker must reach the same verdict on every surface that reads it. These
+// exercise the exact call shapes archive and the gate checker use - archive
+// passes markerProjectRoot (not projectRoot, which would also switch on the
+// task-numbering pass it has never run), the gate checker passes projectRoot.
+// Without them the spec's "honored at validate is honored at archive" scenario
+// rests on a type check rather than a run.
+describe('marker verdict agrees across validate, archive and gate surfaces', () => {
+  let tempDir: string;
+  let projectRoot: string;
+  let changeDir: string;
+
+  const PLUGIN_NAME = 'fixture-plugin';
+  const PLUGIN_SCHEMA = 'fixture-schema';
+
+  beforeEach(async () => {
+    tempDir = await fsPromises.mkdtemp(
+      path.join(os.tmpdir(), 'openspec-marker-surfaces-')
+    );
+    projectRoot = path.join(tempDir, 'project');
+    // Outside the project tree, as a shared spec store is.
+    changeDir = path.join(tempDir, 'store', 'changes', 'a-change');
+    await fsPromises.mkdir(changeDir, { recursive: true });
+
+    const pluginDir = path.join(projectRoot, 'openspec', 'plugins', PLUGIN_NAME);
+    const schemaDir = path.join(pluginDir, 'schemas', PLUGIN_SCHEMA);
+    await fsPromises.mkdir(schemaDir, { recursive: true });
+    await fsPromises.writeFile(
+      path.join(projectRoot, 'openspec', 'config.yaml'),
+      `changesDir: "../store/changes"\nplugins:\n  - ${PLUGIN_NAME}\n`
+    );
+    await fsPromises.writeFile(
+      path.join(pluginDir, 'plugin.yaml'),
+      `name: ${PLUGIN_NAME}\nversion: 1.0.0\nschemas:\n  - ${PLUGIN_SCHEMA}\n`
+    );
+    await fsPromises.writeFile(
+      path.join(schemaDir, 'schema.yaml'),
+      [
+        `name: ${PLUGIN_SCHEMA}`,
+        'version: 1',
+        'description: Fixture schema provided by a plugin',
+        'artifacts:',
+        '  - id: notes',
+        '    generates: notes.md',
+        '    description: Fixture artifact',
+        '    template: notes.md',
+        '',
+      ].join('\n')
+    );
+    await fsPromises.writeFile(
+      path.join(changeDir, '.openspec.yaml'),
+      `schema: ${PLUGIN_SCHEMA}\nskip_specs: true\n`
+    );
+  });
+
+  afterEach(async () => {
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("honors the marker through archive's call shape", async () => {
+    const validator = new Validator();
+    const report = await validator.validateChangeDeltaSpecs(changeDir, {
+      markerProjectRoot: projectRoot,
+    });
+
+    expect(report.valid).toBe(true);
+    expect(report.issues.some(i => i.level === 'ERROR')).toBe(false);
+    expect(report.issues.find(i => i.level === 'INFO')?.message).toContain(
+      'skip_specs'
+    );
+  });
+
+  it("honors the marker through the gate checker's call shape", async () => {
+    const checker = new GateChecker();
+    const result = await checker.checkGate(
+      { id: 'validate-delta-specs', check: 'validate-delta-specs', severity: 'blocking' },
+      changeDir,
+      { projectRoot }
+    );
+
+    expect(result.passed).toBe(true);
+  });
+
+  // Guards the two above: without the root they must fail, or they prove nothing.
+  it('refuses the same marker on every surface when no root is supplied', async () => {
+    const validator = new Validator();
+    const report = await validator.validateChangeDeltaSpecs(changeDir);
+    expect(report.valid).toBe(false);
+
+    const checker = new GateChecker();
+    const result = await checker.checkGate(
+      { id: 'validate-delta-specs', check: 'validate-delta-specs', severity: 'blocking' },
+      changeDir
+    );
+    expect(result.passed).toBe(false);
   });
 });
