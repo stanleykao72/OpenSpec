@@ -42,6 +42,7 @@ import { registerContextCommand } from '../commands/context.js';
 import { registerWorksetCommand } from '../commands/workset.js';
 import {
   statusCommand,
+  BATCH_STATUS_FAILURE_PAYLOAD,
   instructionsCommand,
   applyInstructionsCommand,
   archiveInstructionsCommand,
@@ -433,8 +434,9 @@ changeCmd
   .option('--json', 'Output as JSON')
   .option('--deltas-only', 'Show only deltas (JSON only)')
   .option('--requirements-only', 'Alias for --deltas-only (deprecated)')
+  .option('--diff', 'Show per-requirement diffs for delta specs')
   .option('--no-interactive', 'Disable interactive prompts')
-  .action(async (changeName?: string, options?: { json?: boolean; requirementsOnly?: boolean; deltasOnly?: boolean; noInteractive?: boolean }) => {
+  .action(async (changeName?: string, options?: { json?: boolean; requirementsOnly?: boolean; deltasOnly?: boolean; diff?: boolean; noInteractive?: boolean }) => {
     try {
       const changeCommand = new ChangeCommand();
       await changeCommand.show(changeName, options);
@@ -564,6 +566,7 @@ program
   // change-only flags
   .option('--deltas-only', 'Show only deltas (JSON only, change)')
   .option('--requirements-only', 'Alias for --deltas-only (deprecated, change)')
+  .option('--diff', 'Show per-requirement diffs for delta specs (change)')
   // spec-only flags
   .option('--requirements', 'JSON only: Show only requirements (exclude scenarios)')
   .option('--no-scenarios', 'JSON only: Exclude scenario content')
@@ -668,6 +671,7 @@ program
   .command('status')
   .description('Display artifact completion status for a change')
   .option('--change <id>', 'Change name to show status for')
+  .option('--all', 'Show status for all active changes')
   .option('--schema <name>', 'Schema override (auto-detected from config.yaml)')
   .option('--json', 'Output as JSON')
   .option('--store <id>', STORE_OPTION_DESCRIPTION)
@@ -676,7 +680,13 @@ program
     try {
       await statusCommand(options);
     } catch (error) {
-      failWithError(error, { enabled: options.json, fallbackCode: 'change_error' });
+      failWithError(error, {
+        enabled: options.json,
+        // The batch null-shape; the single-change failure shape is
+        // pre-existing contract and stays payload-free.
+        payload: options.all ? BATCH_STATUS_FAILURE_PAYLOAD : undefined,
+        fallbackCode: 'change_error',
+      });
       process.exit(1);
     }
   });
