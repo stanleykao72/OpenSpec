@@ -97,6 +97,8 @@ interface CapabilityCoverageDetails {
   proposal_capabilities: string[];
   spec_dirs: string[];
   missing: string[];
+  orphan_spec_dirs: string[];
+  reason: string | null;
 }
 
 interface ScenarioTaskRatioDetails {
@@ -186,7 +188,9 @@ export class GateChecker {
   }
 
   /**
-   * Check that every capability listed in proposal.md has a matching spec dir.
+   * Check that proposal capabilities and spec dirs match both ways.
+   * Zero parsed capabilities is a failure: a gate that checked nothing must not
+   * report success (T-366).
    */
   checkCapabilityCoverage(changeDir: string): { passed: boolean } & CapabilityCoverageDetails {
     const proposalPath = path.join(changeDir, 'proposal.md');
@@ -196,13 +200,26 @@ export class GateChecker {
     const specDirs = this.listSpecDirs(specsDir);
 
     const specDirSet = new Set(specDirs);
+    const capabilitySet = new Set(proposalCapabilities);
     const missing = proposalCapabilities.filter(cap => !specDirSet.has(cap));
+    const orphanSpecDirs = specDirs.filter(dir => !capabilitySet.has(dir));
+
+    let reason: string | null = null;
+    if (proposalCapabilities.length === 0) {
+      reason = 'no capabilities parsed from proposal.md (expected entries under ### New Capabilities or ### Modified Capabilities)';
+    } else if (missing.length > 0) {
+      reason = `capabilities without a spec dir: ${missing.join(', ')}`;
+    } else if (orphanSpecDirs.length > 0) {
+      reason = `spec dirs not listed in proposal: ${orphanSpecDirs.join(', ')}`;
+    }
 
     return {
-      passed: missing.length === 0,
+      passed: reason === null,
       proposal_capabilities: proposalCapabilities,
       spec_dirs: specDirs,
       missing,
+      orphan_spec_dirs: orphanSpecDirs,
+      reason,
     };
   }
 
@@ -554,39 +571,38 @@ export class GateChecker {
       return [];
     }
 
+    // Same rules as odoo-claude-code alignment-check (traceability / spec-lint).
+    // test/core/validation/fixtures/capability-parser-vectors.json pins both
+    // parsers to the same expected output (T-366).
     const capabilities: string[] = [];
-    const lines = content.split('\n');
-    let inCapabilities = false;
-    let inNewCapabilities = false;
+    let inSection = false;
+    let inFence = false;
 
-    for (const line of lines) {
-      // Detect ## Capabilities section
-      if (/^##\s+Capabilities/i.test(line)) {
-        inCapabilities = true;
+    for (const line of content.split('\n')) {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
         continue;
       }
-      // Detect ### New Capabilities subsection
-      if (inCapabilities && /^###\s+New Capabilities/i.test(line)) {
-        inNewCapabilities = true;
+      if (inFence) continue;
+
+      // ### New Capabilities or ### Modified Capabilities opens a section
+      if (/^###\s+(New|Modified)\s+Capabilities\b/i.test(line)) {
+        inSection = true;
         continue;
       }
-      // Exit on next ## or ### section
-      if (inNewCapabilities && /^##[#]?\s+/.test(line) && !/^###\s+New Capabilities/i.test(line)) {
-        break;
-      }
-
-      if (!inNewCapabilities) continue;
-
-      // Match list format: - `name`: description
-      const listMatch = line.match(/^-\s+`([^`]+)`/);
-      if (listMatch) {
-        capabilities.push(listMatch[1]);
+      // Any other level 1-3 heading closes it
+      if (/^#{1,3}\s+/.test(line)) {
+        inSection = false;
         continue;
       }
-      // Match table format: | `name` | description |
-      const tableMatch = line.match(/^\|\s*`([^`]+)`\s*\|/);
-      if (tableMatch) {
-        capabilities.push(tableMatch[1]);
+      if (!inSection) continue;
+
+      // List format: - `name`: description   /   Table format: | `name` | description |
+      const match =
+        line.match(/^[-*]\s+`([a-z0-9][a-z0-9-]*)`/) ??
+        line.match(/^\|\s*`([a-z0-9][a-z0-9-]*)`\s*\|/);
+      if (match && !capabilities.includes(match[1])) {
+        capabilities.push(match[1]);
       }
     }
 
