@@ -998,11 +998,16 @@ export const COMMENT_LAYER_SCRIPT = `<!-- ======================================
     }
   }
 
-  /* ---- 存成檔案（change comment-downloads-readback）----
-     Artifact runtime downloads capability：window.claude.downloads 存在時才
-     現形（按鈕以 hidden 出廠，HTML 常數維持靜態、確定性不受影響）。sink 是
-     檔案內容（純文字，非 HTML 解析情境），與剪貼簿 sink 同級——輸出
-     buildExportMarkdown() 原文不跳脫，兩路徑逐字相同。 ---- */
+  /* ---- 存成檔案（change comment-downloads-readback；viewer-downloads-claude-use）----
+     Artifact runtime downloads capability（contract 0.2.x）：window.claude 只帶
+     use，namespace 以 claude.use("downloads") 非同步取得，resolve 出帶 save 的
+     namespace 才現形（按鈕以 hidden 出廠，HTML 常數維持靜態、確定性不受影響）。
+     null／use 缺席／use 拋錯或 reject 一律等同缺席；不讀 window.claude 的
+     capability 成員——契約不保證其存在。sink 是檔案內容（純文字，非 HTML 解析
+     情境），與剪貼簿 sink 同級——輸出 buildExportMarkdown() 原文不跳脫，兩路徑
+     逐字相同。 ---- */
+
+  var downloadsApi = null;
 
   function sanitizedSaveFilename() {
     var base = (CHANGE_NAME || "")
@@ -1017,7 +1022,7 @@ export const COMMENT_LAYER_SCRIPT = `<!-- ======================================
   }
 
   function saveCommentsFile() {
-    var dl = window.claude && window.claude.downloads;
+    var dl = downloadsApi;
     if (!dl) return;
     var filename = sanitizedSaveFilename();
     dl.save({ filename: filename, data: buildExportMarkdown() }).then(
@@ -1119,9 +1124,25 @@ export const COMMENT_LAYER_SCRIPT = `<!-- ======================================
   if (exportBtn) exportBtn.addEventListener("click", exportComments);
 
   var saveBtn = document.getElementById("spec-comment-save-btn");
-  if (saveBtn && window.claude && window.claude.downloads) {
-    saveBtn.hidden = false;
-    saveBtn.addEventListener("click", saveCommentsFile);
+  var claudeRuntime = window.claude;
+  if (saveBtn && claudeRuntime && typeof claudeRuntime.use === "function") {
+    var downloadsReady;
+    try {
+      downloadsReady = Promise.resolve(claudeRuntime.use("downloads"));
+    } catch (useErr) {
+      downloadsReady = Promise.resolve(null);
+    }
+    downloadsReady.then(
+      function (ns) {
+        if (!ns || typeof ns.save !== "function") return;
+        downloadsApi = ns;
+        saveBtn.hidden = false;
+        saveBtn.addEventListener("click", saveCommentsFile);
+      },
+      function () {
+        // use() 失敗（模組載入失敗等）等同 capability 缺席：按鈕維持 hidden
+      }
+    );
   }
 
   var modalCloseBtn = document.getElementById("spec-comment-modal-close");
