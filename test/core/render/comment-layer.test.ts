@@ -121,7 +121,11 @@ function bootPage(
     // downloads capability stub（change comment-downloads-readback）：
     // 'absent'＝window.claude 無 downloads 成員；'ok'＝save 成功；
     // 其餘值＝以該 error code reject
-    downloads?: 'absent' | 'ok' | 'declined' | 'rate_limited' | 'bad_request' | 'too_large' | 'unavailable';
+    // T-337：'legacy-member'＝只有舊式 window.claude.downloads 成員、use 回 null；
+    // 'use-rejects'＝use() reject；'no-claude'＝頁面根本沒有 window.claude
+    downloads?:
+      | 'absent' | 'ok' | 'declined' | 'rate_limited' | 'bad_request' | 'too_large' | 'unavailable'
+      | 'legacy-member' | 'use-rejects' | 'use-throws' | 'no-claude';
   } = {}
 ): Page {
   const { changeName = 'demo-change', clipboard = 'ok' } = options;
@@ -231,20 +235,29 @@ function bootPage(
     getSelection: () => selectionState,
   };
 
-  // downloads capability stub：window.claude 恆存在（對齊平台 kernel 行為），
-  // 成員 downloads 只在 stub 啟用時出現
+  // downloads capability stub（runtime contract 0.2.x，T-337）：window.claude 只帶
+  // use，namespace 由 use("downloads") 非同步 resolve（frozen），不可用時 resolve
+  // null。'legacy-member' 另掛舊式 window.claude.downloads，驗證評論層不讀成員。
   const saveCalls: Array<{ filename: string; data: string }> = [];
   const downloads = options.downloads ?? 'absent';
-  win.claude = {};
-  if (downloads !== 'absent') {
-    win.claude.downloads = {
-      save: (req: { filename: string; data: string }) => {
-        saveCalls.push({ filename: req.filename, data: req.data });
-        return downloads === 'ok'
-          ? Promise.resolve({ status: 'saved' })
-          : Promise.reject({ code: downloads, message: downloads });
+  const downloadsNs = Object.freeze({
+    save: (req: { filename: string; data: string }) => {
+      saveCalls.push({ filename: req.filename, data: req.data });
+      return downloads === 'ok'
+        ? Promise.resolve({ status: 'saved' })
+        : Promise.reject({ code: downloads, message: downloads });
+    },
+  });
+  if (downloads !== 'no-claude') {
+    win.claude = {
+      use: (name: string) => {
+        if (downloads === 'use-throws') throw new Error('use exploded synchronously');
+        if (downloads === 'use-rejects') return Promise.reject(new Error('module failed to load'));
+        const served = name === 'downloads' && downloads !== 'absent' && downloads !== 'legacy-member';
+        return Promise.resolve(served ? downloadsNs : null);
       },
     };
+    if (downloads === 'legacy-member') win.claude.downloads = downloadsNs;
   }
 
   const ctx = vm.createContext({
@@ -614,9 +627,16 @@ describe('comment layer — separability（5.1/5.2 的離線部分）', () => {
 
 describe('存成檔案 — downloads capability（change comment-downloads-readback）', () => {
   const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+  // claude.use("downloads") 非同步 resolve（契約保證不在首次同步執行內），
+  // 按鈕在 resolve 後才現形——斷言前先讓 microtask 跑完
+  const bootReady = async (options: Parameters<typeof bootPage>[0]) => {
+    const page = bootPage(options);
+    await flush();
+    return page;
+  };
 
   it('capability 缺席時按鈕維持 hidden，匯出行為不變', async () => {
-    const p = bootPage();
+    const p = await bootReady({});
     expect(p.refs.saveBtn.hidden).toBe(true);
     p.refs.exportBtn.dispatch('click', {});
     await flush();
@@ -624,8 +644,44 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
     expect(p.saveCalls.length).toBe(0);
   });
 
+  it('按鈕不在首次同步執行內現形，claude.use resolve 後才出現（T-337）', async () => {
+    const page = bootPage({ downloads: 'ok' });
+    expect(page.refs.saveBtn.hidden).toBe(true);
+    await flush();
+    expect(page.refs.saveBtn.hidden).toBe(false);
+  });
+
+  it('只有舊式 window.claude.downloads 成員、use 回 null：按鈕維持 hidden（契約只保證 use）', async () => {
+    const p = await bootReady({ downloads: 'legacy-member' });
+    expect(p.refs.saveBtn.hidden).toBe(true);
+    p.refs.saveBtn.dispatch('click', {});
+    await flush();
+    expect(p.saveCalls.length).toBe(0);
+  });
+
+  it('claude.use reject：按鈕維持 hidden、不拋錯', async () => {
+    const p = await bootReady({ downloads: 'use-rejects' });
+    expect(p.refs.saveBtn.hidden).toBe(true);
+  });
+
+  it('claude.use 同步拋錯：評論層照常啟動、按鈕維持 hidden', async () => {
+    const p = await bootReady({ downloads: 'use-throws' });
+    expect(p.refs.saveBtn.hidden).toBe(true);
+    p.refs.exportBtn.dispatch('click', {});
+    await flush();
+    expect(p.clipboardWrites.length).toBe(1);
+  });
+
+  it('頁面無 window.claude（file:// 直開）：按鈕維持 hidden、匯出不受影響', async () => {
+    const p = await bootReady({ downloads: 'no-claude' });
+    expect(p.refs.saveBtn.hidden).toBe(true);
+    p.refs.exportBtn.dispatch('click', {});
+    await flush();
+    expect(p.clipboardWrites.length).toBe(1);
+  });
+
   it('capability 存在時按鈕現形；save 收到淨化檔名與逐字相同的 Markdown', async () => {
-    const p = bootPage({ downloads: 'ok' });
+    const p = await bootReady({ downloads: 'ok' });
     expect(p.refs.saveBtn.hidden).toBe(false);
     p.refs.saveBtn.dispatch('click', {});
     await flush();
@@ -638,14 +694,14 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
   });
 
   it('change 名淨化後為空時檔名用 unknown-change', async () => {
-    const p = bootPage({ downloads: 'ok', changeName: '純中文名稱' });
+    const p = await bootReady({ downloads: 'ok', changeName: '純中文名稱' });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.saveCalls[0].filename).toBe('spec-comments-unknown-change.md');
   });
 
   it('declined：提示已取消、不重試、不開 fallback modal', async () => {
-    const p = bootPage({ downloads: 'declined' });
+    const p = await bootReady({ downloads: 'declined' });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.saveCalls.length).toBe(1);
@@ -655,7 +711,7 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
   });
 
   it('bad_request：退回可全選複製的 fallback modal', async () => {
-    const p = bootPage({ downloads: 'bad_request' });
+    const p = await bootReady({ downloads: 'bad_request' });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.refs.modal.hidden).toBe(false);
@@ -663,7 +719,7 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
   });
 
   it('too_large：可恢復——不藏按鈕、退回 fallback modal', async () => {
-    const p = bootPage({ downloads: 'too_large' });
+    const p = await bootReady({ downloads: 'too_large' });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.refs.saveBtn.hidden).toBe(false);
@@ -673,7 +729,7 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
 
   it('超長 change 名的檔名被截斷到安全長度', async () => {
     const long = 'a'.repeat(300);
-    const p = bootPage({ downloads: 'ok', changeName: long });
+    const p = await bootReady({ downloads: 'ok', changeName: long });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.saveCalls[0].filename.length).toBeLessThanOrEqual(140);
@@ -683,7 +739,7 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
   it('截斷邊界落在 dash 時尾端連字號被清除', async () => {
     // 119 個 a + 非法字元（轉成 '-'）+ 更多字：截到 120 字元時第 120 位是 '-'
     const name = 'a'.repeat(119) + '!' + 'b'.repeat(50);
-    const p = bootPage({ downloads: 'ok', changeName: name });
+    const p = await bootReady({ downloads: 'ok', changeName: name });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     const base = p.saveCalls[0].filename.replace(/^spec-comments-/, '').replace(/\.md$/, '');
@@ -692,7 +748,7 @@ describe('存成檔案 — downloads capability（change comment-downloads-readb
   });
 
   it('unavailable：隱藏按鈕並指向剪貼簿路徑', async () => {
-    const p = bootPage({ downloads: 'unavailable' });
+    const p = await bootReady({ downloads: 'unavailable' });
     p.refs.saveBtn.dispatch('click', {});
     await flush();
     expect(p.refs.saveBtn.hidden).toBe(true);
