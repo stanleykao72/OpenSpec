@@ -1,0 +1,70 @@
+{
+  "_about": "Shared test vectors for the proposal capability parser (vault T-366). The same file lives in openspec-fork test/core/validation/fixtures/ and odoo-claude-code openspec/plugins/alignment-check/tests/fixtures/. Both parsers MUST produce `expected` for every vector; change both copies together.",
+  "vectors": [
+    {
+      "id": "new-bullets",
+      "proposal": ["## Capabilities", "", "### New Capabilities", "", "- `user-auth`: User authentication", "- `data-export`: Data export"],
+      "expected": ["user-auth", "data-export"]
+    },
+    {
+      "id": "modified-only",
+      "proposal": ["## Capabilities", "", "### New Capabilities", "", "### Modified Capabilities", "", "- `memory-backend-vault`: fix index lookup"],
+      "expected": ["memory-backend-vault"]
+    },
+    {
+      "id": "new-and-modified-fullwidth-punctuation",
+      "proposal": ["## Capabilities", "", "### New Capabilities", "- `vault-memory-contract`：定義 vault 記憶契約", "", "### Modified Capabilities", "- `memory-backend-vault`（PR #8）：auto-inject 索引讀法修正"],
+      "expected": ["vault-memory-contract", "memory-backend-vault"]
+    },
+    {
+      "id": "table-rows",
+      "proposal": ["## Capabilities", "### New Capabilities", "", "| Capability | Description |", "|------------|-------------|", "| `user-auth` | Authentication |", "| `data-export` | Export |"],
+      "expected": ["user-auth", "data-export"]
+    },
+    {
+      "id": "no-capabilities-section",
+      "proposal": ["## Why", "Some reason", "", "## What Changes", "- `not-a-cap`: mentioned outside the section"],
+      "expected": []
+    },
+    {
+      "id": "section-ends-at-next-heading",
+      "proposal": ["### New Capabilities", "- `real-cap`: listed", "", "## Impact", "- `impact-item`: not a capability"],
+      "expected": ["real-cap"]
+    },
+    {
+      "id": "level-four-heading-does-not-end-section",
+      "proposal": ["### New Capabilities", "#### Notes", "- `still-inside`: listed after a level-4 heading"],
+      "expected": ["still-inside"]
+    },
+    {
+      "id": "star-bullet",
+      "proposal": ["### New Capabilities", "* `star-cap`: star bullet"],
+      "expected": ["star-cap"]
+    },
+    {
+      "id": "fenced-code-ignored",
+      "proposal": ["### New Capabilities", "```", "- `example-only`: inside a code fence", "```", "- `real-cap`: outside the fence"],
+      "expected": ["real-cap"]
+    },
+    {
+      "id": "duplicate-across-subsections",
+      "proposal": ["### New Capabilities", "- `same-cap`: new", "### Modified Capabilities", "- `same-cap`: modified"],
+      "expected": ["same-cap"]
+    },
+    {
+      "id": "non-kebab-and-mid-line-backticks-ignored",
+      "proposal": ["### New Capabilities", "- `UserAuth`: not kebab-case", "- uses `mid-line` backticks", "text `not-a-bullet`: plain line"],
+      "expected": []
+    },
+    {
+      "id": "case-insensitive-heading",
+      "proposal": ["### new capabilities", "- `lower-heading`: accepted"],
+      "expected": ["lower-heading"]
+    },
+    {
+      "id": "empty-subsections",
+      "proposal": ["## Capabilities", "", "### New Capabilities", "", "### Modified Capabilities", "", "## Impact"],
+      "expected": []
+    }
+  ]
+}

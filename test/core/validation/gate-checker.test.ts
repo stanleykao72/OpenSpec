@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import os from 'os';
 import { GateChecker } from '../../../src/core/validation/gate-checker.js';
 
@@ -54,7 +55,9 @@ describe('GateChecker (7.3 - 7.7)', () => {
       expect(result.missing).toEqual(['missing-cap']);
     });
 
-    it('should pass when proposal has no Capabilities section', () => {
+    // T-366: zero parsed capabilities used to pass — a gate that checked nothing
+    // reported success. It now fails and says why.
+    it('should fail with a reason when proposal has no Capabilities section', () => {
       writeFileSync(path.join(tmpDir, 'proposal.md'), [
         '## Why',
         'Some reason',
@@ -64,23 +67,59 @@ describe('GateChecker (7.3 - 7.7)', () => {
       ].join('\n'));
 
       const result = checker.checkCapabilityCoverage(tmpDir);
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
       expect(result.proposal_capabilities).toEqual([]);
+      expect(result.reason).toContain('no capabilities');
     });
 
-    it('should pass when proposal.md does not exist', () => {
+    it('should fail with a reason when proposal.md does not exist', () => {
       const result = checker.checkCapabilityCoverage(tmpDir);
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
       expect(result.proposal_capabilities).toEqual([]);
+      expect(result.reason).toContain('no capabilities');
     });
 
-    it('should pass when specs/ dir does not exist but no capabilities listed', () => {
+    it('should fail when no capabilities are listed even though a spec dir exists', () => {
       writeFileSync(path.join(tmpDir, 'proposal.md'), [
         '## Why',
         'Some reason',
       ].join('\n'));
+      mkdirSync(path.join(tmpDir, 'specs', 'orphan-cap'), { recursive: true });
       const result = checker.checkCapabilityCoverage(tmpDir);
-      expect(result.passed).toBe(true);
+      expect(result.passed).toBe(false);
+      expect(result.orphan_spec_dirs).toEqual(['orphan-cap']);
+    });
+
+    it('should count Modified Capabilities, not only New (T-366)', () => {
+      writeFileSync(path.join(tmpDir, 'proposal.md'), [
+        '## Capabilities',
+        '### New Capabilities',
+        '- `vault-memory-contract`：定義 vault 記憶契約',
+        '',
+        '### Modified Capabilities',
+        '- `memory-backend-vault`（PR #8）：auto-inject 索引讀法修正',
+      ].join('\n'));
+      mkdirSync(path.join(tmpDir, 'specs', 'vault-memory-contract'), { recursive: true });
+
+      const result = checker.checkCapabilityCoverage(tmpDir);
+      expect(result.proposal_capabilities).toEqual(['vault-memory-contract', 'memory-backend-vault']);
+      expect(result.passed).toBe(false);
+      expect(result.missing).toEqual(['memory-backend-vault']);
+    });
+
+    it('should fail when a spec dir is not listed in the proposal (dir → capability)', () => {
+      writeFileSync(path.join(tmpDir, 'proposal.md'), [
+        '## Capabilities',
+        '### New Capabilities',
+        '- `user-auth`: User authentication',
+      ].join('\n'));
+      mkdirSync(path.join(tmpDir, 'specs', 'user-auth'), { recursive: true });
+      mkdirSync(path.join(tmpDir, 'specs', 'unlisted-cap'), { recursive: true });
+
+      const result = checker.checkCapabilityCoverage(tmpDir);
+      expect(result.passed).toBe(false);
+      expect(result.missing).toEqual([]);
+      expect(result.orphan_spec_dirs).toEqual(['unlisted-cap']);
     });
 
     it('should parse table format capabilities', () => {
@@ -114,6 +153,28 @@ describe('GateChecker (7.3 - 7.7)', () => {
       const result = checker.checkCapabilityCoverage(tmpDir);
       expect(result.passed).toBe(false);
       expect(result.missing).toEqual(['user-auth']);
+    });
+
+    // Shared with odoo-claude-code alignment-check (traceability / spec-lint) so the
+    // three gates cannot disagree on which capabilities a proposal lists (T-366).
+    describe('shared capability parser vectors', () => {
+      const testDir = path.dirname(fileURLToPath(import.meta.url));
+      const vectorFile = path.join(testDir, 'fixtures', 'capability-parser-vectors.json');
+      const { vectors } = JSON.parse(readFileSync(vectorFile, 'utf-8')) as {
+        vectors: Array<{ id: string; proposal: string[]; expected: string[] }>;
+      };
+
+      it('has vectors to run', () => {
+        expect(vectors.length).toBeGreaterThan(0);
+      });
+
+      for (const vector of vectors) {
+        it(`parses vector: ${vector.id}`, () => {
+          writeFileSync(path.join(tmpDir, 'proposal.md'), vector.proposal.join('\n'));
+          const result = checker.checkCapabilityCoverage(tmpDir);
+          expect(result.proposal_capabilities).toEqual(vector.expected);
+        });
+      }
     });
   });
 
