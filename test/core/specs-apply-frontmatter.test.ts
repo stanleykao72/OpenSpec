@@ -10,6 +10,7 @@ import {
   buildUpdatedSpec,
   parseLeadingFrontmatter,
 } from '../../src/core/specs-apply.js';
+import { formatLocalDate } from '../../src/utils/date.js';
 
 const DATE = '2026-08-19';
 const CHANGE = 'add-widget-export';
@@ -17,6 +18,22 @@ const CHANGE = 'add-widget-export';
 describe('archiveDateStamp', () => {
   it('formats as YYYY-MM-DD', () => {
     expect(archiveDateStamp(new Date('2026-08-19T13:45:00Z'))).toBe('2026-08-19');
+  });
+
+  // The archive directory name uses the local date (formatLocalDate); the `sources:` stamp
+  // must use the same one. Measured 2026-09-23 07:42 in Asia/Taipei (= 2026-09-22 23:42 UTC):
+  // the change landed in 2026-09-23-<name> while its specs said "archived 2026-09-22".
+  it('uses the local date, the same one the archive directory name uses', () => {
+    const saved = process.env.TZ;
+    process.env.TZ = 'Asia/Taipei';
+    try {
+      const justAfterLocalMidnight = new Date('2026-09-22T23:42:00Z');
+      expect(archiveDateStamp(justAfterLocalMidnight)).toBe('2026-09-23');
+      expect(archiveDateStamp(justAfterLocalMidnight)).toBe(formatLocalDate(justAfterLocalMidnight));
+    } finally {
+      if (saved === undefined) delete process.env.TZ;
+      else process.env.TZ = saved;
+    }
   });
 });
 

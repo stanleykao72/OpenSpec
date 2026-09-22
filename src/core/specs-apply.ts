@@ -27,6 +27,7 @@ import {
 } from './validation/constants.js';
 import { discoverSpecFiles } from '../utils/spec-discovery.js';
 import { FileSystemUtils } from '../utils/file-system.js';
+import { formatLocalDate } from '../utils/date.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -1038,11 +1039,13 @@ function maskHtmlComments(content: string): string {
 }
 
 /**
- * Today's date as YYYY-MM-DD. Single source of truth for archive stamps so the
- * skeleton, the `sources:` append and the archive directory name cannot drift.
+ * Today's date as YYYY-MM-DD in the process's local time zone — the same date the archive
+ * directory name uses (`formatLocalDate` in archive.ts). It used to be the UTC date, so an
+ * archive run in the first hours of the local day (UTC+8: before 08:00) stamped `sources:`
+ * with the previous day while the directory carried today's date.
  */
 export function archiveDateStamp(now: Date = new Date()): string {
-  return now.toISOString().split('T')[0];
+  return formatLocalDate(now);
 }
 
 /** A parsed leading `---` frontmatter block, if the document has one. */
