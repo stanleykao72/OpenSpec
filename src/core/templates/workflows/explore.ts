@@ -11,7 +11,7 @@ export function getExploreSkillTemplate(): SkillTemplate {
   return {
     name: 'openspec-explore',
     description: 'Enter explore mode - a thinking partner for exploring ideas, investigating problems, and clarifying requirements. Use when the user wants to think through something before or during a change.',
-    instructions: `Enter explore mode. Think deeply. Visualize freely. Follow the conversation wherever it goes.
+    instructions: `Enter explore mode. Visualize freely. Follow the conversation wherever it goes.
 
 **IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, investigate the codebase, and run read-only commands or tools without confirmation, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit explore mode first and create a change proposal. You MAY create or update OpenSpec change artifacts (proposals, designs, specs) within a confirmed scope—that's capturing thinking, not implementing. Answering design or clarifying questions is never consent to write. Before the first write-capable action, name the artifacts or files you would change and what you would do, ask a direct yes/no question, and wait for the user's confirmation in a separate message. Confirmation covers only the scope you described; ask again before expanding it. For a new change, scaffold it first as described below.
 
@@ -162,7 +162,7 @@ If the user mentions a change or you detect one is relevant:
 - Produce a specific artifact
 - Reach a conclusion
 - Stay on topic if a tangent is valuable
-- Be brief (this is thinking time)
+- Be brief (exploration is open-ended)
 
 ---
 
@@ -303,7 +303,7 @@ But this summary is optional. Sometimes the thinking IS the value.
 
 - **Don't implement** - Never write code or implement features. Workflow configuration counts too: creating or editing schemas, templates, or \`openspec/config.yaml\` is a change, not thinking. Creating or updating OpenSpec change artifacts within the confirmed scope is fine, writing anything else is not.
 - **Don't fake understanding** - If something is unclear, dig deeper
-- **Don't rush** - Discovery is thinking time, not task time
+- **Don't jump ahead** - Discovery comes before tasks
 - **Don't force structure** - Let patterns emerge naturally
 - **Don't auto-capture** - Offer to save insights, don't just do it. Read-only commands and tools need no confirmation. Before the first write-capable action—including \`openspec new change\` or another command that writes files—name the artifacts or files and proposed changes, ask a direct yes/no question, and wait for explicit confirmation in a separate user message. That confirmation covers only the described scope; ask again before expanding it. Answers to design or clarifying questions are never consent to write.
 - **Don't manually scaffold changes** - Never create a new change directory under \`openspec/changes/\` by hand. Always use \`openspec new change "<name>"\` (with \`--store <id>\` when applicable) so required metadata such as \`.openspec.yaml\` is created before writing artifacts.
@@ -322,7 +322,7 @@ export function getOpsxExploreCommandTemplate(): CommandTemplate {
     description: 'Enter explore mode - think through ideas, investigate problems, clarify requirements',
     category: 'Workflow',
     tags: ['workflow', 'explore', 'experimental', 'thinking'],
-    content: `Enter explore mode. Think deeply. Visualize freely. Follow the conversation wherever it goes.
+    content: `Enter explore mode. Visualize freely. Follow the conversation wherever it goes.
 
 **IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, investigate the codebase, and run read-only commands or tools without confirmation, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit explore mode first and create a change proposal. You MAY create or update OpenSpec change artifacts (proposals, designs, specs) within a confirmed scope—that's capturing thinking, not implementing. Answering design or clarifying questions is never consent to write. Before the first write-capable action, name the artifacts or files you would change and what you would do, ask a direct yes/no question, and wait for the user's confirmation in a separate message. Confirmation covers only the scope you described; ask again before expanding it. For a new change, scaffold it first as described below.
 
@@ -482,7 +482,7 @@ If the user mentions a change or you detect one is relevant:
 - Produce a specific artifact
 - Reach a conclusion
 - Stay on topic if a tangent is valuable
-- Be brief (this is thinking time)
+- Be brief (exploration is open-ended)
 
 ---
 
@@ -503,7 +503,7 @@ When things crystallize, you might offer a summary - but it's optional. Sometime
 
 - **Don't implement** - Never write code or implement features. Workflow configuration counts too: creating or editing schemas, templates, or \`openspec/config.yaml\` is a change, not thinking. Creating or updating OpenSpec change artifacts within the confirmed scope is fine, writing anything else is not.
 - **Don't fake understanding** - If something is unclear, dig deeper
-- **Don't rush** - Discovery is thinking time, not task time
+- **Don't jump ahead** - Discovery comes before tasks
 - **Don't force structure** - Let patterns emerge naturally
 - **Don't auto-capture** - Offer to save insights, don't just do it. Read-only commands and tools need no confirmation. Before the first write-capable action—including \`openspec new change\` or another command that writes files—name the artifacts or files and proposed changes, ask a direct yes/no question, and wait for explicit confirmation in a separate user message. That confirmation covers only the described scope; ask again before expanding it. Answers to design or clarifying questions are never consent to write.
 - **Don't manually scaffold changes** - Never create a new change directory under \`openspec/changes/\` by hand. Always use \`openspec new change "<name>"\` (with \`--store <id>\` when applicable) so required metadata such as \`.openspec.yaml\` is created before writing artifacts.

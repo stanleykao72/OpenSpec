@@ -38,14 +38,14 @@ import {
 import { STORE_SELECTION_GUIDANCE } from '../../../src/core/templates/workflows/store-selection.js';
 
 const EXPECTED_FUNCTION_HASHES: Record<string, string> = {
-  getExploreSkillTemplate: 'ecaa0bea4c1cd14eee9dbfcfe4b5808fff4ff808cba0a46789b37c1df3048d9a',
+  getExploreSkillTemplate: '916c2c36024810131148a75c997bd21ac7b3ad52ed165262eae15cd3c6b818ca',
   getNewChangeSkillTemplate: 'eabd1e895c5881dcb17dcbaa3fb26098dd59e8eacb318e400820b4dc811ef781',
   getContinueChangeSkillTemplate: '012136f6411a99c8fa228e2f9444cb64b0a89e0f56fdeac2fe03b2f5bee0c5d7',
   getApplyChangeSkillTemplate: '3e3913795118359ea4fef49b7e8bc1be54480a586070d11abb6ede02c99c75fa',
   getFfChangeSkillTemplate: '5501740e7ec36ab23ab8c3a0d6dd0655a5e2f35433c7b90e82904fef5e7a326a',
   getSyncSpecsSkillTemplate: 'b099e2ff31859c9b10d928066e662524f9aad9ecf2be12fceacb732d718c4146',
   getOnboardSkillTemplate: '3a836faae463d88c289a1c129cb7ee556a563b7e53e1a52a4711ff152a3b51f7',
-  getOpsxExploreCommandTemplate: '1460fcb4fbdf22244e9e76608102e611db598cd4cca8c5dbd001292854bcba6e',
+  getOpsxExploreCommandTemplate: 'feaaf20c46638284093f0cca9ee8b35a5b6601185f5cb59de7cc3acedfa34d6f',
   getOpsxNewCommandTemplate: 'f2d30e569798a4c92ba932859d6ba4e0ad10e18feccbade1cfee0957597b3463',
   getOpsxContinueCommandTemplate: 'e50e50266efa1b8e64ff9b6274ee8254f0a240d6adc1b862d126e2f1c9d3a559',
   getOpsxApplyCommandTemplate: '05a346e011b2103308ad50879095de5775e32fa4475a092f8721695daba34820',
@@ -66,7 +66,7 @@ const EXPECTED_FUNCTION_HASHES: Record<string, string> = {
 };
 
 const EXPECTED_GENERATED_SKILL_CONTENT_HASHES: Record<string, string> = {
-  'openspec-explore': '886680e71f2900378bd12bb9ff25c888a41a8f851e0bb3ec056affcc18d07ca8',
+  'openspec-explore': 'f17502bd832f8c0fd27719ad32a96401646b938621b48836b9dce90cbc285063',
   'openspec-new-change': 'ec4529beef978e34634a6f7286fab55d68fad8fb374dceb45691d52caab33fbb',
   'openspec-continue-change': 'bb6194a16c54891cdb253678e8f70ce53b2af86735243980f366ce551d37e42e',
   'openspec-apply-change': 'e8c674b26a2feaf7b9eeefc81eef01b37b0cb02f1e3678c985da3950f32864b6',
