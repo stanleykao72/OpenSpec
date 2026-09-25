@@ -39,6 +39,8 @@ export default defineConfig({
       DO_NOT_TRACK: '1',
     },
     // Tests rely on per-file process isolation (e.g., `process.cwd()` assumptions).
+    // test/setup-env.ts also requires forks: os.homedir() only honours the
+    // isolated $HOME in a child process, and the setup file throws otherwise.
     pool: 'forks',
     maxWorkers: resolveMaxWorkers(),
     include: ['test/**/*.test.ts'],
