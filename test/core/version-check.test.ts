@@ -386,15 +386,39 @@ describe('getAvailableCliUpdate against an unroutable registry', () => {
  * user's global environment without consent is the wrong default.
  */
 describe('offerCliUpgrade', () => {
+  const fixturePrefixes: string[] = [];
+
+  /**
+   * An npm-owned global install location, derived by npmGlobalRoots() itself.
+   *
+   * Not `npmGlobalRoots()[0]`: that root sits beside the running node binary,
+   * and what the developer has installed there is not the test's to decide. On
+   * a machine that `npm link`s a source checkout of this CLI (the usual way to
+   * run a fork), `<root>/@fission-ai/openspec` is that checkout, `.git` and
+   * all, so canSelfUpgrade() rightly refuses it. The prefix root npm exports
+   * via npm_config_prefix is the same code path, pointed at an empty fixture.
+   */
+  function npmGlobalInstallFixture(): string {
+    const prefix = fs.mkdtempSync(path.join(os.tmpdir(), 'openspec-npm-prefix-'));
+    fixturePrefixes.push(prefix);
+    vi.stubEnv('npm_config_prefix', prefix);
+    const root = npmGlobalRoots().at(-1)!;
+    expect(root.startsWith(prefix + path.sep)).toBe(true);
+    return path.join(root, '@fission-ai', 'openspec');
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.doUnmock('@inquirer/prompts');
     vi.resetModules();
+    for (const prefix of fixturePrefixes.splice(0)) {
+      fs.rmSync(prefix, { recursive: true, force: true });
+    }
   });
 
   it('offers only for an npm-owned global install', () => {
-    // Anchored on this machine's real npm root so the case is not fictional.
-    const npmGlobal = path.join(npmGlobalRoots()[0], '@fission-ai', 'openspec');
+    const npmGlobal = npmGlobalInstallFixture();
     expect(canSelfUpgrade(npmGlobal, PROJECT_ROOT)).toBe(true);
 
     // `npm install -g` is the only command we run, so anything npm does not
@@ -413,7 +437,7 @@ describe('offerCliUpgrade', () => {
   });
 
   it('asks only where the answer can be given and acted on', () => {
-    const npmGlobal = path.join(npmGlobalRoots()[0], '@fission-ai', 'openspec');
+    const npmGlobal = npmGlobalInstallFixture();
     const base = { installDir: npmGlobal, projectPath: PROJECT_ROOT };
 
     expect(shouldOfferUpgrade({ ...base, interactive: true, stdoutIsTty: true })).toBe(true);
