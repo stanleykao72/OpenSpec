@@ -61,9 +61,11 @@ export const ProjectConfigSchema = z.object({
     .describe('Per-artifact rules, keyed by artifact ID'),
 
   // Optional: plugin whitelist (only listed plugins are loaded, order matters)
+  // null (a bare `plugins:` key) means no plugins, as in readProjectConfig.
   plugins: z
     .array(z.string().min(1))
-    .optional()
+    .nullish()
+    .transform((plugins) => plugins ?? undefined)
     .describe('Plugin names to load, in execution order'),
 
   // Optional: per-plugin configuration (namespaced by plugin name)
@@ -420,7 +422,9 @@ function parseProjectConfigContent(
     }
 
     // Parse plugins field (string array)
-    if (raw.plugins !== undefined) {
+    // A bare `plugins:` (every entry commented out) parses as null: no plugins,
+    // not an invalid field. readPluginWhitelist agrees.
+    if (raw.plugins !== undefined && raw.plugins !== null) {
       if (Array.isArray(raw.plugins)) {
         const validPlugins: string[] = [];
         for (let i = 0; i < raw.plugins.length; i++) {

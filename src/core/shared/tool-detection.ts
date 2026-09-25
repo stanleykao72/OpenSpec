@@ -94,6 +94,13 @@ export interface ToolVersionStatus {
    * added or removed, or overlays that no longer resolve).
    */
   overlaysChanged: boolean;
+  /**
+   * For a global skill target (shared by every project, e.g. ~/.minimax/skills):
+   * its skills were last rendered with other plugin overlays than this
+   * project's. Informational only: it does not set needsUpdate, since each
+   * project would otherwise re-render the shared skills for itself.
+   */
+  globalOverlaysDiffer: boolean;
   /** Whether the tool needs updating (version mismatch, missing, or overlays changed) */
   needsUpdate: boolean;
 }
@@ -366,6 +373,7 @@ export function getToolVersionStatus(
       configured: false,
       generatedByVersion: null,
       overlaysChanged: false,
+      globalOverlaysDiffer: false,
       needsUpdate: false,
     };
   }
@@ -423,10 +431,17 @@ export function getToolVersionStatus(
   //    by every project, so comparing it with this project's overlays would
   //    make projects with different plugins re-render it for each other on
   //    every update. Those fall back to the version check alone.
+  //    For those, a differing fingerprint is only surfaced as a hint.
   let overlaysChanged = false;
-  if (skillConfigured && foundSkillFile && !hasGlobalSkillTarget(tool)) {
+  let globalOverlaysDiffer = false;
+  if (skillConfigured && foundSkillFile) {
     const current = projectOverlays();
-    overlaysChanged = current === null || extractOverlayFingerprint(foundSkillFile) !== current.fingerprint;
+    const differs = current === null || extractOverlayFingerprint(foundSkillFile) !== current.fingerprint;
+    if (hasGlobalSkillTarget(tool)) {
+      globalOverlaysDiffer = differs;
+    } else {
+      overlaysChanged = differs;
+    }
   }
   if (!skillConfigured && !commandConfigured && markerConfigured) {
     const delivery = getGlobalConfig().delivery ?? 'both';
@@ -448,6 +463,7 @@ export function getToolVersionStatus(
     configured,
     generatedByVersion,
     overlaysChanged,
+    globalOverlaysDiffer,
     needsUpdate,
   };
 }

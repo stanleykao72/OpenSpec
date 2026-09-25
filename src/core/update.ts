@@ -259,6 +259,7 @@ export class UpdateCommand {
       }
       // All tools are up to date
       this.displayUpToDateMessage(toolStatuses);
+      this.displayGlobalOverlayHints(toolStatuses, toolsToUpdateSet);
       await this.syncCopilotCloudFiles(resolvedProjectPath, configuredAndNewTools);
 
       // Still check for new tool directories and extra workflows
@@ -276,6 +277,9 @@ export class UpdateCommand {
       console.log('No additional refresh needed after legacy migration.');
     } else {
       this.displayUpdatePlan([...toolsToUpdateSet], statusByTool, toolsUpToDate);
+    }
+    if (!this.force) {
+      this.displayGlobalOverlayHints(toolStatuses, toolsToUpdateSet);
     }
     console.log();
 
@@ -610,6 +614,29 @@ export class UpdateCommand {
   /**
    * Display the update plan showing which tools need updating.
    */
+  /**
+   * A global skill target (e.g. ~/.minimax/skills) is shared by every project,
+   * so its overlay fingerprint does not make it stale (projects with different
+   * plugins would re-render it for each other). When it was last rendered with
+   * other overlays than this project's, say so instead of staying silent.
+   */
+  private displayGlobalOverlayHints(
+    statuses: ToolVersionStatus[],
+    toolsToUpdate: ReadonlySet<string>
+  ): void {
+    for (const status of statuses) {
+      if (!status.globalOverlaysDiffer || toolsToUpdate.has(status.toolId)) continue;
+      const tool = AI_TOOLS.find((candidate) => candidate.value === status.toolId);
+      const where = tool?.globalSkillsDir ? ` (~/${tool.globalSkillsDir}/skills)` : '';
+      console.log(
+        chalk.yellow(
+          `Note: ${status.toolId}'s global skills${where} were rendered with different plugin overlays than this project's. ` +
+            'They are shared across projects, so they are not refreshed automatically; run `openspec update --force` to apply this project\'s overlays.'
+        )
+      );
+    }
+  }
+
   private displayUpdatePlan(
     toolsToUpdate: string[],
     statusByTool: Map<string, ToolVersionStatus>,

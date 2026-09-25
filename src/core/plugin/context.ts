@@ -14,6 +14,16 @@ interface PluginLoadResult {
 let cachedResult: PluginLoadResult | null = null;
 let cachedProjectRoot: string | null = null;
 
+/**
+ * Reports every problem at once, so fixing the first does not merely reveal
+ * the next (e.g. `plugins: [123, missing-plugin]` names both).
+ */
+function combineFailures(...failures: Array<Error | null>): Error | null {
+  const present = failures.filter((failure): failure is Error => failure !== null);
+  if (present.length <= 1) return present[0] ?? null;
+  return new Error(present.map((failure) => failure.message).join('; also: '));
+}
+
 function loadAndValidate(projectRoot: string): PluginLoadResult {
   // The whitelist is read strictly so that a corrupt config.yaml (unreadable,
   // not YAML, `plugins` not a list, a bad entry) is a failure, not "no
@@ -33,7 +43,7 @@ function loadAndValidate(projectRoot: string): PluginLoadResult {
   } catch (err) {
     return {
       plugins: [],
-      failure: whitelistFailure ?? (err instanceof Error ? err : new Error(String(err))),
+      failure: combineFailures(whitelistFailure, err instanceof Error ? err : new Error(String(err))),
       loadFailed: true,
     };
   }
@@ -48,7 +58,7 @@ function loadAndValidate(projectRoot: string): PluginLoadResult {
 
   const kept = new Set(validated.plugins.map((plugin) => plugin.manifest.name));
   const dropped = loaded.map((plugin) => plugin.manifest.name).filter((name) => !kept.has(name));
-  const failure = whitelistFailure ?? (dropped.length > 0
+  const failure = combineFailures(whitelistFailure, dropped.length > 0
     ? new Error(
         `Whitelisted plugin(s) ${dropped.join(', ')} failed config validation: ${validated.errors.join('; ')}`
       )

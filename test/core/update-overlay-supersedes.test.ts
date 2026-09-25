@@ -8,6 +8,7 @@ import { InitCommand } from '../../src/core/init.js';
 import { clearPluginCache, getLoadedPlugins } from '../../src/core/plugin/context.js';
 import { FileSystemUtils } from '../../src/utils/file-system.js';
 import { loadProjectOverlays } from '../../src/core/shared/overlay-generation.js';
+import { ProjectConfigSchema, readPluginWhitelist, readProjectConfig } from '../../src/core/project-config.js';
 import { areCommandFilesUpToDate, getToolVersionStatus } from '../../src/core/shared/tool-detection.js';
 import type { GlobalConfig } from '../../src/core/global-config.js';
 import { createRequire } from 'node:module';
@@ -437,6 +438,30 @@ describe('overlay supersedes across generation entry points', () => {
     expect(() => getLoadedPlugins(testDir, { strict: true })).toThrow(/plugins/);
   });
 
+  it('reports both a bad whitelist entry and a missing plugin, strict and lenient', async () => {
+    await fs.writeFile(
+      path.join(testDir, 'openspec', 'config.yaml'),
+      'schema: spec-driven\nplugins:\n  - 123\n  - missing-plugin\n'
+    );
+
+    expect(() => getLoadedPlugins(testDir, { strict: true })).toThrow(/index 0[\s\S]*missing-plugin/);
+    clearPluginCache();
+    getLoadedPlugins(testDir);
+    const warned = vi.mocked(console.warn).mock.calls.map((call) => String(call[0])).join('\n');
+    expect(warned).toMatch(/Plugin loading failed:.*index 0.*missing-plugin/s);
+  });
+
+  it('treats a bare `plugins:` (null) as no plugins, without a problem or warning, in both readers', async () => {
+    await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\nplugins:\n  # - odoo-lifecycle\n');
+
+    expect(readPluginWhitelist(testDir)).toEqual({ plugins: [], problem: null });
+    expect(readProjectConfig(testDir)?.plugins).toBeUndefined();
+    expect(getLoadedPlugins(testDir, { strict: true })).toEqual([]);
+    const warned = vi.mocked(console.warn).mock.calls.map((call) => String(call[0])).join('\n');
+    expect(warned).not.toMatch(/plugins/);
+    expect(ProjectConfigSchema.safeParse({ schema: 'spec-driven', plugins: null }).success).toBe(true);
+  });
+
   it('a config without a plugins key is not an error', async () => {
     await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\n');
 
@@ -546,6 +571,51 @@ describe('overlay supersedes across generation entry points', () => {
       expect(minimax.configured).toBe(true);
       expect(minimax.overlaysChanged).toBe(false);
       expect(minimax.needsUpdate).toBe(false);
+    });
+
+    async function configureMinimax(): Promise<string> {
+      const skillsRoot = path.join(process.env.HOME!, '.minimax', 'skills');
+      await fs.mkdir(path.join(skillsRoot, 'openspec-explore'), { recursive: true });
+      await fs.writeFile(path.join(skillsRoot, 'openspec-explore', 'SKILL.md'), '---\nname: openspec-explore\n---\nold\n');
+      return skillsRoot;
+    }
+
+    it('hints at --force when a global skill target was rendered with other overlays', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      const skillsRoot = await configureMinimax();
+      await new UpdateCommand().execute(testDir);
+      // Another project with different plugins rendered the shared skills last.
+      for (const dir of await fs.readdir(skillsRoot)) {
+        const file = path.join(skillsRoot, dir, 'SKILL.md');
+        const content = await fs.readFile(file, 'utf-8').catch(() => null);
+        if (content) await fs.writeFile(file, content.replace(/overlays: "[0-9a-f]+"/, 'overlays: "0123456789abcdef"'));
+      }
+      clearPluginCache();
+      const log = vi.mocked(console.log);
+      log.mockClear();
+
+      const minimax = getToolVersionStatus(testDir, 'minimax-code', OPENSPEC_VERSION);
+      expect(minimax.needsUpdate).toBe(false);
+      expect(minimax.globalOverlaysDiffer).toBe(true);
+
+      await new UpdateCommand().execute(testDir);
+
+      const printed = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+      expect(printed).toMatch(/minimax-code.*different plugin overlays.*openspec update --force/s);
+    });
+
+    it('prints no global-target hint when the fingerprints match', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await configureMinimax();
+      await new UpdateCommand().execute(testDir);
+      const log = vi.mocked(console.log);
+      log.mockClear();
+
+      await new UpdateCommand().execute(testDir);
+
+      const printed = log.mock.calls.map((call) => call.map(String).join(' ')).join('\n');
+      expect(printed).not.toMatch(/different plugin overlays/);
+      expect(getToolVersionStatus(testDir, 'minimax-code', OPENSPEC_VERSION).globalOverlaysDiffer).toBe(false);
     });
 
     it('stamps no overlay fingerprint in a plugin-less project', async () => {
