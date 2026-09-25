@@ -34,6 +34,9 @@ export {
   PluginLoadError,
   resolveOverlayPaths,
   getPluginOverlays,
+  getPluginOverlayEntries,
+  getPluginSupersedes,
+  type PluginOverlayEntry,
 } from './loader.js';
 
 export {

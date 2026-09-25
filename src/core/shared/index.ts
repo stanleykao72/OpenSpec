@@ -28,7 +28,10 @@ export {
   getCommandContents,
   generateSkillContent,
   composeTransformers,
+  type SkillContentOptions,
 } from './skill-generation.js';
+
+export { stripSections, listSections } from './template-sections.js';
 
 export {
   type SkillCapableTool,

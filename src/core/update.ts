@@ -20,9 +20,11 @@ import {
 import {
   getToolVersionStatus,
   getSkillTemplates,
+  getCommandTemplates,
   getCommandContents,
   generateSkillContent,
   composeTransformers,
+  stripSections,
   getToolsWithSkillsDir,
   hasGlobalSkillTarget,
   resolveToolSkillsDir,
@@ -30,7 +32,7 @@ import {
   type ToolVersionStatus,
 } from './shared/index.js';
 import { getLoadedPlugins } from './plugin/context.js';
-import { getPluginOverlays } from './plugin/loader.js';
+import { getPluginOverlayEntries } from './plugin/loader.js';
 import type { LoadedPlugin } from './plugin/types.js';
 import {
   detectLegacyArtifacts,
@@ -175,6 +177,12 @@ export class UpdateCommand {
     } catch (err) {
       console.warn(chalk.yellow(`Plugin loading failed, continuing without overlays: ${err instanceof Error ? err.message : String(err)}`));
     }
+    // Resolved once, outside the warn-and-continue above: an overlay that
+    // supersedes a base section the template does not define fails the update
+    // here, before any file is written.
+    const workflowOverlays = resolveWorkflowOverlays(loadedPlugins);
+    const supersedesFor = (workflowId: string): string[] =>
+      workflowOverlays.get(workflowId)?.supersedes ?? [];
 
     // 4. Detect and handle legacy artifacts + upgrade legacy tools using effective config
     const legacyUpgrade = await this.handleLegacyCleanup(
@@ -310,16 +318,15 @@ export class UpdateCommand {
         const writesSkills = !tool.skillsDir || sharedSkillWriters.has(tool.value);
         const toolWorkflows = legacyWorkflowOverrides[tool.value] ?? desiredWorkflows;
         const skillTemplates = getSkillTemplates(toolWorkflows);
-        const commandContents = getCommandContents(toolWorkflows);
-        // Fork plugin/gate system: apply plugin overlays to command bodies. Upstream
+        // Fork plugin/gate system: base sections an overlay supersedes are dropped
+        // while rendering the bodies, then the overlays are appended. Upstream
         // moved command generation into the per-tool loop, so the overlay pass moved
         // with it — applying it once globally would now miss every tool.
-        if (loadedPlugins.length > 0) {
-          for (const cmd of commandContents) {
-            const overlayContents = getPluginOverlays(loadedPlugins, cmd.id);
-            if (overlayContents.length > 0) {
-              cmd.body = cmd.body + '\n\n' + overlayContents.join('\n\n');
-            }
+        const commandContents = getCommandContents(toolWorkflows, supersedesFor);
+        for (const cmd of commandContents) {
+          const overlayContents = workflowOverlays.get(cmd.id)?.contents ?? [];
+          if (overlayContents.length > 0) {
+            cmd.body = cmd.body + '\n\n' + overlayContents.join('\n\n');
           }
         }
 
@@ -332,7 +339,7 @@ export class UpdateCommand {
             // Build overlay transformer from active plugins, then compose it with
             // upstream's per-tool command-reference transformer (which supersedes the
             // fork's hand-rolled hyphen-command special case).
-            const overlayContents = getPluginOverlays(loadedPlugins, workflowId);
+            const overlayContents = workflowOverlays.get(workflowId)?.contents ?? [];
             const overlayTransformer = overlayContents.length > 0
               ? (s: string) => s + '\n\n' + overlayContents.join('\n\n')
               : undefined;
@@ -345,7 +352,11 @@ export class UpdateCommand {
                 resolveCommandInvocation(tool.value)
               )
             );
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer);
+            // Superseded base sections are dropped before the overlay transformer
+            // appends, so the overlay replaces them rather than following them.
+            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer, {
+              supersedes: supersedesFor(workflowId),
+            });
             FileSystemUtils.assertPathWithin(skillsRoot, skillFile);
             await FileSystemUtils.writeFile(skillFile, skillContent);
           }
@@ -1281,4 +1292,52 @@ export class UpdateCommand {
 
     return { newlyConfiguredTools: newlyConfigured, workflowOverrides, skippedSharedSkillTools };
   }
+}
+
+/**
+ * Overlays active for one workflow: appended contents in plugin whitelist
+ * order, and the union of base sections they supersede.
+ */
+interface WorkflowOverlay {
+  contents: string[];
+  supersedes: string[];
+}
+
+/**
+ * Collects every workflow's overlays once and validates `supersedes` against
+ * the base templates (skill and command) of that workflow. Fails closed: an
+ * unknown section name, or `supersedes` on a workflow with no base template,
+ * throws with the offending names instead of being skipped.
+ */
+function resolveWorkflowOverlays(plugins: LoadedPlugin[]): Map<string, WorkflowOverlay> {
+  const workflowIds = new Set<string>();
+  for (const plugin of plugins) {
+    for (const workflowId of Object.keys(plugin.manifest.skill_overlays ?? {})) {
+      workflowIds.add(workflowId);
+    }
+  }
+
+  const overlays = new Map<string, WorkflowOverlay>();
+  for (const workflowId of workflowIds) {
+    const entries = getPluginOverlayEntries(plugins, workflowId);
+    if (entries.length === 0) continue;
+    const supersedes = [...new Set(entries.flatMap((entry) => entry.supersedes))];
+    overlays.set(workflowId, { contents: entries.map((entry) => entry.content), supersedes });
+
+    if (supersedes.length === 0) continue;
+    const skills = getSkillTemplates([workflowId]);
+    const commands = getCommandTemplates([workflowId]);
+    if (skills.length === 0 && commands.length === 0) {
+      throw new Error(
+        `Overlay for unknown workflow "${workflowId}" supersedes section(s): ${supersedes.join(', ')}.`
+      );
+    }
+    for (const { template } of skills) {
+      stripSections(template.instructions, supersedes, `${workflowId} skill`);
+    }
+    for (const { template } of commands) {
+      stripSections(template.content, supersedes, `${workflowId} command`);
+    }
+  }
+  return overlays;
 }

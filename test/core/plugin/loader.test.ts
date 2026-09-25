@@ -11,6 +11,8 @@ import {
   PluginLoadError,
   resolveOverlayPaths,
   getPluginOverlays,
+  getPluginOverlayEntries,
+  getPluginSupersedes,
 } from '../../../src/core/plugin/loader.js';
 import type { LoadedPlugin } from '../../../src/core/plugin/types.js';
 
@@ -300,6 +302,64 @@ describe('plugin/loader', () => {
 
       const contents = getPluginOverlays([plugin], 'apply');
       expect(contents).toEqual([]);
+    });
+  });
+
+  describe('getPluginOverlayEntries', () => {
+    function makePlugin(name: string, overlay: Record<string, unknown>, file: string | null): LoadedPlugin {
+      const dir = path.join(tempDir, 'openspec', 'plugins', name);
+      createPluginYaml(dir, { name, version: '1.0.0', skill_overlays: { apply: overlay } });
+      if (file !== null) {
+        fs.mkdirSync(path.join(dir, 'overlays'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'overlays', 'apply.md'), file);
+      }
+      return { manifest: parsePluginManifest(dir), dir, source: 'project', config: {} };
+    }
+
+    it('carries each overlay supersedes list alongside its content', () => {
+      const plugin = makePlugin(
+        'sup-plugin',
+        { append: 'overlays/apply.md', supersedes: ['apply-inline-loop'] },
+        '## Fan-out'
+      );
+
+      expect(getPluginOverlayEntries([plugin], 'apply')).toEqual([
+        { content: '## Fan-out', supersedes: ['apply-inline-loop'] },
+      ]);
+    });
+
+    it('defaults supersedes to an empty list', () => {
+      const plugin = makePlugin('plain-plugin', { append: 'overlays/apply.md' }, 'Plain');
+      expect(getPluginOverlayEntries([plugin], 'apply')).toEqual([{ content: 'Plain', supersedes: [] }]);
+    });
+
+    it('drops the supersedes of an overlay whose file is missing', () => {
+      // Stripping base sections with nothing appended in their place would leave
+      // the workflow without any procedure, which is worse than keeping the base.
+      const plugin = makePlugin(
+        'missing-sup-plugin',
+        { append: 'overlays/apply.md', supersedes: ['apply-inline-loop'] },
+        null
+      );
+
+      expect(getPluginOverlayEntries([plugin], 'apply')).toEqual([]);
+      expect(getPluginSupersedes([plugin], 'apply')).toEqual([]);
+    });
+
+    it('unions supersedes across plugins without duplicates, in whitelist order', () => {
+      const a = makePlugin(
+        'sup-a',
+        { append: 'overlays/apply.md', supersedes: ['apply-inline-loop'] },
+        'A'
+      );
+      const b = makePlugin(
+        'sup-b',
+        { append: 'overlays/apply.md', supersedes: ['apply-output-templates', 'apply-inline-loop'] },
+        'B'
+      );
+
+      expect(getPluginSupersedes([a, b], 'apply')).toEqual(['apply-inline-loop', 'apply-output-templates']);
+      expect(getPluginOverlays([a, b], 'apply')).toEqual(['A', 'B']);
     });
   });
 });

@@ -314,6 +314,46 @@ export function resolveOverlayPaths(
 }
 
 /**
+ * One active overlay for a workflow: its appended content and the base-template
+ * sections it replaces.
+ */
+export interface PluginOverlayEntry {
+  content: string;
+  supersedes: string[];
+}
+
+/**
+ * Collects the overlays for a specific workflow from all active plugins, in
+ * plugin whitelist order.
+ * Warns (but continues) if a declared overlay file doesn't exist; such an
+ * overlay contributes neither content nor supersedes, because dropping base
+ * sections with nothing appended in their place would leave no procedure.
+ */
+export function getPluginOverlayEntries(
+  plugins: LoadedPlugin[],
+  workflowId: string
+): PluginOverlayEntry[] {
+  const entries: PluginOverlayEntry[] = [];
+
+  for (const plugin of plugins) {
+    const overlay = plugin.manifest.skill_overlays?.[workflowId];
+    if (!overlay) continue;
+    const overlayPath = path.join(plugin.dir, overlay.append);
+
+    try {
+      const content = fs.readFileSync(overlayPath, 'utf-8');
+      entries.push({ content, supersedes: [...(overlay.supersedes ?? [])] });
+    } catch {
+      console.warn(
+        `[plugin:${plugin.manifest.name}] Overlay file not found: ${overlayPath}`
+      );
+    }
+  }
+
+  return entries;
+}
+
+/**
  * Collects overlay content for a specific workflow from all active plugins.
  * Returns overlay contents in plugin whitelist order.
  * Warns (but continues) if a declared overlay file doesn't exist.
@@ -322,22 +362,20 @@ export function getPluginOverlays(
   plugins: LoadedPlugin[],
   workflowId: string
 ): string[] {
-  const contents: string[] = [];
+  return getPluginOverlayEntries(plugins, workflowId).map((entry) => entry.content);
+}
 
-  for (const plugin of plugins) {
-    const paths = resolveOverlayPaths(plugin);
-    const overlayPath = paths.get(workflowId);
-    if (!overlayPath) continue;
-
-    try {
-      const content = fs.readFileSync(overlayPath, 'utf-8');
-      contents.push(content);
-    } catch {
-      console.warn(
-        `[plugin:${plugin.manifest.name}] Overlay file not found: ${overlayPath}`
-      );
-    }
+/**
+ * Base-template sections superseded for a workflow by the active overlays:
+ * the de-duplicated union across plugins, in whitelist order.
+ */
+export function getPluginSupersedes(
+  plugins: LoadedPlugin[],
+  workflowId: string
+): string[] {
+  const names = new Set<string>();
+  for (const entry of getPluginOverlayEntries(plugins, workflowId)) {
+    for (const name of entry.supersedes) names.add(name);
   }
-
-  return contents;
+  return [...names];
 }

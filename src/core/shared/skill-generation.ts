@@ -33,6 +33,7 @@ import {
 } from '../templates/skill-templates.js';
 import type { CommandContent } from '../command-generation/index.js';
 import { OPENSPEC_CLI_ALLOWED_TOOLS } from './allowed-tools.js';
+import { stripSections } from './template-sections.js';
 
 /**
  * Skill template with directory name and workflow ID mapping.
@@ -108,9 +109,17 @@ export function getCommandTemplates(workflowFilter?: readonly string[]): Command
 /**
  * Converts command templates to CommandContent array, optionally filtered by workflow IDs.
  *
+ * Bodies are rendered through `stripSections`, so section markers never reach
+ * a generated command. Sections named by `supersedesFor(id)` are dropped whole
+ * (an unknown name throws).
+ *
  * @param workflowFilter - If provided, only return contents whose id is in this array
+ * @param supersedesFor - Base sections an overlay replaces, per workflow ID
  */
-export function getCommandContents(workflowFilter?: readonly string[]): CommandContent[] {
+export function getCommandContents(
+  workflowFilter?: readonly string[],
+  supersedesFor?: (workflowId: string) => readonly string[]
+): CommandContent[] {
   const commandTemplates = getCommandTemplates(workflowFilter);
   return commandTemplates.map(({ template, id }) => ({
     id,
@@ -118,7 +127,7 @@ export function getCommandContents(workflowFilter?: readonly string[]): CommandC
     description: template.description,
     category: template.category,
     tags: template.tags,
-    body: template.content,
+    body: stripSections(template.content, supersedesFor?.(id) ?? [], `${id} command`),
   }));
 }
 
@@ -142,14 +151,24 @@ export function composeTransformers(
   return (input: string) => defined.reduce((acc, fn) => fn(acc), input);
 }
 
+/**
+ * Options for {@link generateSkillContent}.
+ */
+export interface SkillContentOptions {
+  /** Base sections an overlay replaces; dropped before any transformer runs. */
+  supersedes?: readonly string[];
+}
+
 export function generateSkillContent(
   template: SkillTemplate,
   generatedByVersion: string,
-  transformInstructions?: (instructions: string) => string
+  transformInstructions?: (instructions: string) => string,
+  options: SkillContentOptions = {}
 ): string {
-  const instructions = transformInstructions
-    ? transformInstructions(template.instructions)
-    : template.instructions;
+  // Section markers are resolved first, so they never reach a generated skill
+  // and an overlay transformer appends to the already-stripped base.
+  const base = stripSections(template.instructions, options.supersedes ?? [], `${template.name} skill`);
+  const instructions = transformInstructions ? transformInstructions(base) : base;
 
   return `---
 name: ${template.name}
