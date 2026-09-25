@@ -93,6 +93,22 @@ describe('resolveWorkflowOverlays', () => {
     expect(() => resolveWorkflowOverlays([p])).toThrow(/marker-overlay.*opsx:section/s);
   });
 
+  it('names plugin, workflow and file when overlay content has a malformed marker', () => {
+    const p = plugin('malformed-overlay', { apply: { append: 'o.md' } }, { 'o.md': '## Mine\n<!--opsx:section x-->\n' });
+
+    expect(() => resolveWorkflowOverlays([p])).toThrow(/malformed-overlay.*'apply'.*o\.md.*Malformed/s);
+  });
+
+  it('rejects overlay content whose unclosed fence would hide a later marker', () => {
+    const p = plugin(
+      'unclosed-fence',
+      { apply: { append: 'o.md' } },
+      { 'o.md': '## Mine\n```\nexample\n<!-- opsx:section hidden -->\n' }
+    );
+
+    expect(() => resolveWorkflowOverlays([p])).toThrow(/unclosed-fence.*o\.md.*fence/s);
+  });
+
   it('allows overlay text that only mentions the marker syntax in code', () => {
     const p = plugin(
       'doc-overlay',

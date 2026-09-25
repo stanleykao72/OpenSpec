@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { listSections, stripSections } from '../../../src/core/shared/template-sections.js';
+import { hasSectionMarkers, listSections, stripSections } from '../../../src/core/shared/template-sections.js';
 
 const open = (name: string) => `<!-- opsx:section ${name} -->`;
 const close = (name: string) => `<!-- /opsx:section ${name} -->`;
@@ -178,6 +178,26 @@ describe('stripSections', () => {
     expect(stripSections(body)).toBe(body.split('\n').filter((line) => !line.includes('section real')).join('\n'));
     expect(stripSections(body, ['real'])).toBe(body.split('\n').slice(0, 11).join('\n'));
     expect(() => stripSections(body, ['example'])).toThrowError(/example/);
+  });
+
+  it('follows CommonMark: a fence line with an info string cannot close a fence', () => {
+    // ```bash inside an open ``` fence is content, so the marker after it is
+    // still inside the fence and must not be read as a marker.
+    const body = ['```', '```bash', open('hidden'), '```', open('real'), 'x', close('real')].join('\n');
+
+    expect(listSections(body)).toEqual(['real']);
+  });
+
+  it('closes a fence only with a run at least as long as the opener', () => {
+    const body = ['````', '```', open('hidden'), '````', open('real'), 'x', close('real')].join('\n');
+
+    expect(listSections(body)).toEqual(['real']);
+  });
+
+  it('throws on a fence left open at the end, so markers cannot hide behind it', () => {
+    expect(() => listSections(['```', open('a'), 'x', close('a')].join('\n'))).toThrowError(/fence.*not closed/i);
+    expect(() => stripSections(['intro', '~~~md', 'x'].join('\n'))).toThrowError(/fence.*not closed/i);
+    expect(() => hasSectionMarkers(['```', 'x'].join('\n'))).toThrowError(/fence.*not closed/i);
   });
 
   it('does not close a backtick fence on a tilde line', () => {

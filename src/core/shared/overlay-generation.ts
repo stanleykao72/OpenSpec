@@ -123,7 +123,13 @@ export function resolveWorkflowOverlays(plugins: readonly LoadedPlugin[]): Workf
         }
         continue;
       }
-      if (hasSectionMarkers(entry.content!)) {
+      let carriesMarkers: boolean;
+      try {
+        carriesMarkers = hasSectionMarkers(entry.content!);
+      } catch (err) {
+        throw new Error(`${owner}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (carriesMarkers) {
         throw new Error(
           `${owner} contains <!-- opsx:section --> markers; overlays cannot define sections ` +
             '(mention the syntax in inline code or a code fence instead).'

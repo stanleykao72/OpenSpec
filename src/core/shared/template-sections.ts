@@ -19,7 +19,8 @@
 
 const MARKER_RE = /^\s*<!-- (\/?)opsx:section ([a-z0-9][a-z0-9-]*) -->\s*$/;
 const MARKER_HINT = 'opsx:section';
-const FENCE_RE = /^\s*(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})/;
+const FENCE_CLOSE_RE = /^\s*(`{3,}|~{3,})\s*$/;
 
 interface ParsedMarker {
   closing: boolean;
@@ -45,29 +46,40 @@ interface Section {
 }
 
 /**
- * Marker lines of a body, skipping fenced code blocks. A fence closes only on
- * a line opening with the same character, at least as long as the opener.
+ * Marker lines of a body, skipping fenced code blocks (CommonMark rules): a
+ * fence opens on a run of 3+ backticks or tildes (an info string may follow)
+ * and closes only on a line holding nothing but a run of the same character
+ * at least as long, so ```bash inside an open fence is content. A fence still
+ * open at the end is an error: it would hide any marker after it.
  */
 function scanMarkers(lines: string[]): Array<{ index: number; marker: ParsedMarker }> {
   const found: Array<{ index: number; marker: ParsedMarker }> = [];
-  let fence: string | null = null;
+  let fence: { run: string; line: number } | null = null;
 
   lines.forEach((line, index) => {
-    const fenceMatch = FENCE_RE.exec(line);
-    if (fenceMatch) {
-      const run = fenceMatch[1];
-      if (fence === null) {
-        fence = run;
-      } else if (run[0] === fence[0] && run.length >= fence.length) {
+    if (fence !== null) {
+      const close = FENCE_CLOSE_RE.exec(line);
+      if (close && close[1][0] === fence.run[0] && close[1].length >= fence.run.length) {
         fence = null;
       }
       return;
     }
-    if (fence !== null) return;
+    const open = FENCE_OPEN_RE.exec(line);
+    if (open) {
+      fence = { run: open[1], line: index + 1 };
+      return;
+    }
     const marker = parseMarker(line, index + 1);
     if (marker) found.push({ index, marker });
   });
 
+  if (fence !== null) {
+    const unclosed = fence as { run: string; line: number };
+    throw new Error(
+      `Code fence opened on line ${unclosed.line} (${unclosed.run}) is not closed; ` +
+        'a section marker after it would be hidden.'
+    );
+  }
   return found;
 }
 
