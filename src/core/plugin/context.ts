@@ -1,4 +1,4 @@
-import { readProjectConfig } from '../project-config.js';
+import { readPluginWhitelist, readProjectConfig } from '../project-config.js';
 import { loadPlugins } from './loader.js';
 import { validateAllPluginConfigs } from './config-validator.js';
 import type { LoadedPlugin } from './types.js';
@@ -7,27 +7,40 @@ interface PluginLoadResult {
   plugins: LoadedPlugin[];
   /** Why part or all of the whitelist could not be loaded; null when all loaded. */
   failure: Error | null;
+  /** A plugin failed to load (warned once); whitelist problems are warned by the config parser. */
+  loadFailed?: boolean;
 }
 
 let cachedResult: PluginLoadResult | null = null;
 let cachedProjectRoot: string | null = null;
 
 function loadAndValidate(projectRoot: string): PluginLoadResult {
-  const config = readProjectConfig(projectRoot);
-  if (!config?.plugins || config.plugins.length === 0) {
-    return { plugins: [], failure: null };
+  // The whitelist is read strictly so that a corrupt config.yaml (unreadable,
+  // not YAML, `plugins` not a list, a bad entry) is a failure, not "no
+  // plugins". The lenient path still loads the valid entries, as before.
+  const whitelist = readPluginWhitelist(projectRoot);
+  const whitelistFailure = whitelist.problem
+    ? new Error(`Plugin whitelist cannot be trusted: ${whitelist.problem}`)
+    : null;
+  if (whitelist.plugins.length === 0) {
+    return { plugins: [], failure: whitelistFailure };
   }
+  const config = readProjectConfig(projectRoot);
 
   let loaded: LoadedPlugin[];
   try {
-    loaded = loadPlugins(projectRoot, config.plugins);
+    loaded = loadPlugins(projectRoot, whitelist.plugins);
   } catch (err) {
-    return { plugins: [], failure: err instanceof Error ? err : new Error(String(err)) };
+    return {
+      plugins: [],
+      failure: whitelistFailure ?? (err instanceof Error ? err : new Error(String(err))),
+      loadFailed: true,
+    };
   }
 
   const validated = validateAllPluginConfigs(
     loaded,
-    config.plugin_config as Record<string, unknown> | undefined
+    config?.plugin_config as Record<string, unknown> | undefined
   );
   for (const err of validated.errors) {
     console.warn(`Plugin config: ${err}`);
@@ -35,11 +48,11 @@ function loadAndValidate(projectRoot: string): PluginLoadResult {
 
   const kept = new Set(validated.plugins.map((plugin) => plugin.manifest.name));
   const dropped = loaded.map((plugin) => plugin.manifest.name).filter((name) => !kept.has(name));
-  const failure = dropped.length > 0
+  const failure = whitelistFailure ?? (dropped.length > 0
     ? new Error(
         `Whitelisted plugin(s) ${dropped.join(', ')} failed config validation: ${validated.errors.join('; ')}`
       )
-    : null;
+    : null);
   return { plugins: validated.plugins, failure };
 }
 
@@ -66,7 +79,7 @@ export function getLoadedPlugins(
   if (cachedResult === null || cachedProjectRoot !== projectRoot) {
     cachedResult = loadAndValidate(projectRoot);
     cachedProjectRoot = projectRoot;
-    if (cachedResult.failure && cachedResult.plugins.length === 0) {
+    if (cachedResult.loadFailed && cachedResult.failure) {
       console.warn(`Plugin loading failed: ${cachedResult.failure.message}`);
     }
   }

@@ -372,6 +372,77 @@ describe('overlay supersedes across generation entry points', () => {
     await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/fixture-lifecycle/);
   });
 
+  // config.yaml-level corruption must not empty the whitelist either: under the
+  // lenient parser each case read as "no plugins", so update rewrote overlaid
+  // skills back to base text (040ae1a even treats vanished overlays as stale).
+  const CORRUPT_CONFIGS: Record<string, string> = {
+    'unparseable YAML': 'schema: spec-driven\nplugins: [fixture-lifecycle\n',
+    'plugins given as a scalar': 'schema: spec-driven\nplugins: fixture-lifecycle\n',
+    'a non-string plugins entry': 'schema: spec-driven\nplugins:\n  - 123\n  - fixture-lifecycle\n',
+    'an empty plugins entry': 'schema: spec-driven\nplugins:\n  - ""\n  - fixture-lifecycle\n',
+    'a non-object document': '- just\n- a list\n',
+  };
+
+  for (const [label, config] of Object.entries(CORRUPT_CONFIGS)) {
+    it(`update fails and keeps overlaid skills when config.yaml has ${label}`, async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      const skillPath = path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md');
+      const overlaid = await fs.readFile(skillPath, 'utf-8');
+
+      await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), config);
+      clearPluginCache();
+
+      await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/config/i);
+      await expect(new UpdateCommand({ force: true }).execute(testDir)).rejects.toThrow(/config/i);
+      expect(await fs.readFile(skillPath, 'utf-8')).toBe(overlaid);
+    });
+
+    it(`init fails before writing skills when config.yaml has ${label}`, async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), config);
+
+      await expect(new InitCommand({ tools: 'claude', force: true }).execute(testDir)).rejects.toThrow(/config/i);
+      await expect(
+        fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  }
+
+  it('update fails and keeps overlaid skills when config.yaml cannot be read', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+    await new UpdateCommand().execute(testDir);
+    const skillPath = path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md');
+    const overlaid = await fs.readFile(skillPath, 'utf-8');
+    const configPath = path.join(testDir, 'openspec', 'config.yaml');
+    await fs.chmod(configPath, 0o000);
+    clearPluginCache();
+
+    try {
+      await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/config/i);
+    } finally {
+      await fs.chmod(configPath, 0o644);
+    }
+    expect(await fs.readFile(skillPath, 'utf-8')).toBe(overlaid);
+  });
+
+  it('read-only callers keep the lenient whitelist: valid entries load, bad ones are warned about', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+    await fs.writeFile(
+      path.join(testDir, 'openspec', 'config.yaml'),
+      'schema: spec-driven\nplugins:\n  - 123\n  - fixture-lifecycle\n'
+    );
+
+    expect(getLoadedPlugins(testDir).map((plugin) => plugin.manifest.name)).toEqual(['fixture-lifecycle']);
+    expect(() => getLoadedPlugins(testDir, { strict: true })).toThrow(/plugins/);
+  });
+
+  it('a config without a plugins key is not an error', async () => {
+    await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\n');
+
+    expect(getLoadedPlugins(testDir, { strict: true })).toEqual([]);
+  });
+
   it('other commands keep the lenient loader: a broken plugin is warned about and skipped', async () => {
     await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\nplugins:\n  - missing-plugin\n');
 
@@ -457,6 +528,24 @@ describe('overlay supersedes across generation entry points', () => {
       clearPluginCache();
 
       expect(status().needsUpdate).toBe(true);
+    });
+
+    it('skips the fingerprint check for global skill targets shared across projects', async () => {
+      // ~/.minimax/skills is shared by every project; comparing it with one
+      // project's overlays would make projects with different plugins keep
+      // re-rendering it for each other. Global targets fall back to the version.
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      const skill = path.join(process.env.HOME!, '.minimax', 'skills', 'openspec-explore', 'SKILL.md');
+      await fs.mkdir(path.dirname(skill), { recursive: true });
+      await fs.writeFile(
+        skill,
+        `---\nname: openspec-explore\nmetadata:\n  author: openspec\n  version: "1.0"\n  generatedBy: "${OPENSPEC_VERSION}"\n  overlays: "0123456789abcdef"\n---\n\nbody\n`
+      );
+
+      const minimax = getToolVersionStatus(testDir, 'minimax-code', OPENSPEC_VERSION);
+      expect(minimax.configured).toBe(true);
+      expect(minimax.overlaysChanged).toBe(false);
+      expect(minimax.needsUpdate).toBe(false);
     });
 
     it('stamps no overlay fingerprint in a plugin-less project', async () => {

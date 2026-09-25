@@ -28,6 +28,7 @@ import {
 } from '../command-surface.js';
 import {
   getSkillCapableTools,
+  hasGlobalSkillTarget,
   resolveToolSkillsDir,
   toolSupportsSkills,
 } from './skill-paths.js';
@@ -418,8 +419,12 @@ export function getToolVersionStatus(
 
   // 3. A skill records the overlay fingerprint it was rendered with; the
   //    version alone cannot tell that a plugin's overlay changed since.
+  //    Skipped for a global skill target (e.g. ~/.minimax/skills): it is shared
+  //    by every project, so comparing it with this project's overlays would
+  //    make projects with different plugins re-render it for each other on
+  //    every update. Those fall back to the version check alone.
   let overlaysChanged = false;
-  if (skillConfigured && foundSkillFile) {
+  if (skillConfigured && foundSkillFile && !hasGlobalSkillTarget(tool)) {
     const current = projectOverlays();
     overlaysChanged = current === null || extractOverlayFingerprint(foundSkillFile) !== current.fingerprint;
   }
