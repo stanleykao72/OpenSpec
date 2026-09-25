@@ -50,12 +50,18 @@ import {
   getToolStates,
   getSkillTemplates,
   getCommandContents,
-  generateSkillContent,
   hasGlobalSkillTarget,
   resolveToolSkillsDir,
   toolSupportsSkills,
   type ToolSkillStatus,
 } from './shared/index.js';
+import {
+  NO_OVERLAYS,
+  loadProjectOverlays,
+  getOverlaidCommandContents,
+  generateOverlaidSkillContent,
+  type WorkflowOverlays,
+} from './shared/overlay-generation.js';
 import { getGlobalConfig, type Delivery, type Profile } from './global-config.js';
 import { getProfileWorkflows, CORE_WORKFLOWS, ALL_WORKFLOWS } from './profiles.js';
 import { getAvailableTools } from './available-tools.js';
@@ -220,6 +226,13 @@ export class InitCommand {
 
     await this.assertLanguageCanBeApplied(projectPath, openspecPath);
 
+    // Plugin skill overlays, rendered exactly as `openspec update` renders them.
+    // Only an existing openspec/config.yaml can enable plugins: a fresh init has
+    // none yet (createConfig runs after generation and writes no plugins), so it
+    // resolves to no overlays. An invalid `supersedes` fails here, before
+    // anything is cleaned up or written.
+    const workflowOverlays = loadProjectOverlays(projectPath);
+
     // Check for legacy artifacts and handle cleanup
     const deferredLegacyCleanup = await this.handleLegacyCleanup(projectPath, extendMode);
 
@@ -285,7 +298,8 @@ export class InitCommand {
     const results = await this.generateSkillsAndCommands(
       projectPath,
       validatedTools,
-      copilotDecision.write
+      copilotDecision.write,
+      workflowOverlays
     );
 
     // Legacy cleanup was deferred to avoid interfering with skill/command generation;
@@ -907,7 +921,8 @@ export class InitCommand {
   private async generateSkillsAndCommands(
     projectPath: string,
     tools: ValidatedInitTool[],
-    writeCopilotCloud: boolean
+    writeCopilotCloud: boolean,
+    overlays: WorkflowOverlays = NO_OVERLAYS
   ): Promise<{
     createdTools: typeof tools;
     refreshedTools: typeof tools;
@@ -934,7 +949,7 @@ export class InitCommand {
     // Get skill and command templates filtered by profile workflows
     const deliveryIncludesCommands = delivery !== 'skills';
     const skillTemplates = getSkillTemplates(workflows);
-    const commandContents = getCommandContents(workflows);
+    const commandContents = getOverlaidCommandContents(workflows, overlays);
 
     // Process each tool
     for (const tool of tools) {
@@ -947,18 +962,23 @@ export class InitCommand {
         // Generate skill files if the selected delivery and tool capability allow skills
         if (shouldGenerateSkills && tool.writesSkills) {
           // Create skill directories and SKILL.md files
-          for (const { template, dirName } of skillTemplates) {
+          for (const { template, dirName, workflowId } of skillTemplates) {
             const skillDir = path.join(tool.skillsPath, dirName);
             const skillFile = path.join(skillDir, 'SKILL.md');
 
             // Generate SKILL.md content with YAML frontmatter including generatedBy
-            const transformer = getTransformerForTool(
-              tool.value,
-              delivery,
-              resolveCommandSurfaceCapability(tool.value),
-              resolveCommandInvocation(tool.value)
+            const skillContent = generateOverlaidSkillContent(
+              template,
+              workflowId,
+              OPENSPEC_VERSION,
+              overlays,
+              getTransformerForTool(
+                tool.value,
+                delivery,
+                resolveCommandSurfaceCapability(tool.value),
+                resolveCommandInvocation(tool.value)
+              )
             );
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer);
 
             // Write the skill file
             FileSystemUtils.assertPathWithin(tool.skillsRoot, skillFile);

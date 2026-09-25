@@ -4,15 +4,23 @@ import fs from 'fs/promises';
 import os from 'os';
 
 import { UpdateCommand } from '../../src/core/update.js';
+import { InitCommand } from '../../src/core/init.js';
 import { clearPluginCache } from '../../src/core/plugin/context.js';
+import { FileSystemUtils } from '../../src/utils/file-system.js';
+import { loadProjectOverlays } from '../../src/core/shared/overlay-generation.js';
+import { areCommandFilesUpToDate, getToolVersionStatus } from '../../src/core/shared/tool-detection.js';
 import type { GlobalConfig } from '../../src/core/global-config.js';
+
+const mockState: { config: GlobalConfig } = {
+  config: { featureFlags: {}, profile: 'core', delivery: 'both' },
+};
 
 // Isolate from the machine's real global config (same pattern as update.test.ts).
 vi.mock('../../src/core/global-config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/core/global-config.js')>();
   return {
     ...actual,
-    getGlobalConfig: (): GlobalConfig => ({ featureFlags: {}, profile: 'core', delivery: 'both' }),
+    getGlobalConfig: (): GlobalConfig => ({ ...mockState.config }),
     saveGlobalConfig: vi.fn(),
   };
 });
@@ -34,7 +42,7 @@ interface OverlayDecl {
   supersedes?: string[];
 }
 
-describe('update with overlay supersedes', () => {
+describe('overlay supersedes across generation entry points', () => {
   let testDir: string;
   let originalEnv: NodeJS.ProcessEnv;
 
@@ -66,6 +74,7 @@ describe('update with overlay supersedes', () => {
   const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 
   beforeEach(async () => {
+    mockState.config = { featureFlags: {}, profile: 'core', delivery: 'both' };
     originalEnv = { ...process.env };
     testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-supersedes-'));
     process.env.HOME = path.join(testDir, 'home');
@@ -166,5 +175,116 @@ describe('update with overlay supersedes', () => {
     await expect(
       fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  const SUPERSEDING_APPLY: Record<string, OverlayDecl> = {
+    apply: { append: 'overlays/apply.md', supersedes: ['apply-inline-loop', 'apply-output-templates'] },
+  };
+
+  function expectSupersededApply(out: string, label: string): void {
+    expect(out, label).not.toContain('Output During Implementation');
+    expect(out, label).not.toContain('**Pause if:**');
+    expect(out, label).toContain('## Apply Via Fixture Fan-out');
+    expect(out, label).not.toContain('opsx:section');
+  }
+
+  it('init in a project whose config enables the plugin applies overlays and supersedes', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+
+    await new InitCommand({ tools: 'claude', force: true }).execute(testDir);
+
+    expectSupersededApply(await read('.claude', 'skills', 'openspec-apply-change', 'SKILL.md'), 'skill');
+    expectSupersededApply(await read('.claude', 'commands', 'opsx', 'apply.md'), 'command');
+  });
+
+  it('init fails before writing skills when supersedes names an unknown section', async () => {
+    await writeFixturePlugin({ apply: { append: 'overlays/apply.md', supersedes: ['no-such-section'] } });
+
+    await expect(new InitCommand({ tools: 'claude', force: true }).execute(testDir)).rejects.toThrow(
+      /no-such-section/
+    );
+    await expect(
+      fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('the legacy-upgrade path applies overlays and supersedes to the tools it sets up', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+    // A legacy slash-command install and no skills: update --force upgrades it.
+    // The main loop then force-rewrites every configured tool, which would hide a
+    // missing overlay pass in the upgrade path, so check every write, not just
+    // the final file.
+    await fs.rm(path.join(testDir, '.claude', 'skills'), { recursive: true, force: true });
+    const legacyDir = path.join(testDir, '.claude', 'commands', 'openspec');
+    await fs.mkdir(legacyDir, { recursive: true });
+    await fs.writeFile(path.join(legacyDir, 'proposal.md'), 'old command content');
+    const writeSpy = vi.spyOn(FileSystemUtils, 'writeFile');
+
+    await new UpdateCommand({ force: true }).execute(testDir);
+
+    const applyWrites = writeSpy.mock.calls.filter(([file]) =>
+      /openspec-apply-change[\\/]SKILL\.md$|opsx[\\/]apply\.md$/.test(String(file))
+    );
+    // The upgrade path and the forced main loop each write skill and command.
+    expect(applyWrites.length).toBeGreaterThanOrEqual(4);
+    for (const [file, content] of applyWrites) {
+      expectSupersededApply(String(content), String(file));
+    }
+  });
+
+  it('command files written by update count as up to date in a project with a supersedes overlay', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+
+    await new UpdateCommand().execute(testDir);
+
+    expect(areCommandFilesUpToDate(testDir, 'claude')).toBe(true);
+  });
+
+  it('a commands-only install does not report needsUpdate right after update', async () => {
+    mockState.config = { featureFlags: {}, profile: 'core', delivery: 'commands' };
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+    // Commands-only: configure Claude through a command file instead of a skill.
+    await fs.rm(path.join(testDir, '.claude', 'skills'), { recursive: true, force: true });
+    const commandDir = path.join(testDir, '.claude', 'commands', 'opsx');
+    await fs.mkdir(commandDir, { recursive: true });
+    await fs.writeFile(path.join(commandDir, 'explore.md'), 'old');
+
+    await new UpdateCommand().execute(testDir);
+
+    expectSupersededApply(await read('.claude', 'commands', 'opsx', 'apply.md'), 'command');
+    const status = getToolVersionStatus(testDir, 'claude', '9.9.9');
+    expect(status.configured).toBe(true);
+    expect(status.needsUpdate).toBe(false);
+  });
+
+  it('up-to-date detection reports stale (without throwing) when supersedes is invalid', async () => {
+    await new UpdateCommand().execute(testDir);
+    await writeFixturePlugin({ apply: { append: 'overlays/apply.md', supersedes: ['no-such-section'] } });
+    clearPluginCache();
+
+    expect(areCommandFilesUpToDate(testDir, 'claude')).toBe(false);
+  });
+
+  it('a fresh init (no openspec/config.yaml yet) resolves to no overlays and writes the full base', async () => {
+    // No config means no plugin whitelist, so there is nothing to load; this is
+    // the one entry point that legitimately runs without plugins.
+    expect(loadProjectOverlays(testDir).supersedesFor('apply')).toEqual([]);
+    expect(loadProjectOverlays(testDir).contentsFor('apply')).toEqual([]);
+
+    await new InitCommand({ tools: 'claude', force: true }).execute(testDir);
+
+    const skill = await read('.claude', 'skills', 'openspec-apply-change', 'SKILL.md');
+    expect(skill).toContain('Output During Implementation');
+    expect(skill).toContain('**Pause if:**');
+    expect(skill).not.toContain('opsx:section');
+  });
+
+  it('a whitelisted plugin that fails to load is skipped with a warning, not fatal', async () => {
+    await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\nplugins:\n  - missing-plugin\n');
+
+    const overlays = loadProjectOverlays(testDir);
+
+    expect(overlays.contentsFor('apply')).toEqual([]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('missing-plugin'));
   });
 });

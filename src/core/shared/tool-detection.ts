@@ -8,7 +8,7 @@ import path from 'path';
 import * as fs from 'fs';
 import { AI_TOOLS, OPENSPEC_SKILL_NAMES } from '../config.js';
 import { CommandAdapterRegistry, generateCommands } from '../command-generation/index.js';
-import { getCommandContents } from './skill-generation.js';
+import { loadProjectOverlays, getOverlaidCommandContents } from './overlay-generation.js';
 import { getGlobalConfig } from '../global-config.js';
 import { getProfileWorkflows, ALL_WORKFLOWS } from '../profiles.js';
 import {
@@ -189,7 +189,16 @@ export function areCommandFilesUpToDate(
     (ALL_WORKFLOWS as readonly string[]).includes(w)
   );
 
-  const commandContents = getCommandContents(knownWorkflows);
+  // Compare against exactly what `update` writes, plugin overlays included;
+  // otherwise every overlay-bearing project reads as stale on each run. An
+  // overlay that cannot be rendered (invalid `supersedes`) means the files are
+  // not current: report stale and let `update` surface the error.
+  let commandContents;
+  try {
+    commandContents = getOverlaidCommandContents(knownWorkflows, loadProjectOverlays(projectRoot));
+  } catch {
+    return false;
+  }
   const generatedCommands = generateCommands(commandContents, adapter);
 
   if (generatedCommands.length === 0) {

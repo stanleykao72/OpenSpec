@@ -20,20 +20,18 @@ import {
 import {
   getToolVersionStatus,
   getSkillTemplates,
-  getCommandTemplates,
-  getCommandContents,
-  generateSkillContent,
-  composeTransformers,
-  stripSections,
   getToolsWithSkillsDir,
   hasGlobalSkillTarget,
   resolveToolSkillsDir,
   toolSupportsSkills,
   type ToolVersionStatus,
 } from './shared/index.js';
-import { getLoadedPlugins } from './plugin/context.js';
-import { getPluginOverlayEntries } from './plugin/loader.js';
-import type { LoadedPlugin } from './plugin/types.js';
+import {
+  loadProjectOverlays,
+  getOverlaidCommandContents,
+  generateOverlaidSkillContent,
+  type WorkflowOverlays,
+} from './shared/overlay-generation.js';
 import {
   detectLegacyArtifacts,
   cleanupLegacyArtifacts,
@@ -170,25 +168,18 @@ export class UpdateCommand {
       (ALL_WORKFLOWS as readonly string[]).includes(workflow)
     );
 
-    // 3b. Load plugins for skill overlays (warn and continue on failure)
-    let loadedPlugins: LoadedPlugin[] = [];
-    try {
-      loadedPlugins = getLoadedPlugins(resolvedProjectPath);
-    } catch (err) {
-      console.warn(chalk.yellow(`Plugin loading failed, continuing without overlays: ${err instanceof Error ? err.message : String(err)}`));
-    }
-    // Resolved once, outside the warn-and-continue above: an overlay that
-    // supersedes a base section the template does not define fails the update
-    // here, before any file is written.
-    const workflowOverlays = resolveWorkflowOverlays(loadedPlugins);
-    const supersedesFor = (workflowId: string): string[] =>
-      workflowOverlays.get(workflowId)?.supersedes ?? [];
+    // 3b. Resolve plugin skill overlays once, for every write below (the main
+    //     loop and the legacy upgrade). A plugin that fails to load is warned
+    //     about and skipped; an overlay that supersedes a base section the
+    //     template does not define fails the update here, before any write.
+    const workflowOverlays = loadProjectOverlays(resolvedProjectPath);
 
     // 4. Detect and handle legacy artifacts + upgrade legacy tools using effective config
     const legacyUpgrade = await this.handleLegacyCleanup(
       resolvedProjectPath,
       desiredWorkflows,
-      delivery
+      delivery,
+      workflowOverlays
     );
     const {
       newlyConfiguredTools,
@@ -318,17 +309,10 @@ export class UpdateCommand {
         const writesSkills = !tool.skillsDir || sharedSkillWriters.has(tool.value);
         const toolWorkflows = legacyWorkflowOverrides[tool.value] ?? desiredWorkflows;
         const skillTemplates = getSkillTemplates(toolWorkflows);
-        // Fork plugin/gate system: base sections an overlay supersedes are dropped
-        // while rendering the bodies, then the overlays are appended. Upstream
-        // moved command generation into the per-tool loop, so the overlay pass moved
-        // with it — applying it once globally would now miss every tool.
-        const commandContents = getCommandContents(toolWorkflows, supersedesFor);
-        for (const cmd of commandContents) {
-          const overlayContents = workflowOverlays.get(cmd.id)?.contents ?? [];
-          if (overlayContents.length > 0) {
-            cmd.body = cmd.body + '\n\n' + overlayContents.join('\n\n');
-          }
-        }
+        // Fork plugin/gate system: overlays (supersedes + append) are applied per
+        // tool through the shared renderer that init, the legacy upgrade and
+        // command up-to-date detection also use.
+        const commandContents = getOverlaidCommandContents(toolWorkflows, workflowOverlays);
 
         // Generate skill files if delivery includes skills
         if (shouldGenerateSkills && writesSkills) {
@@ -336,15 +320,14 @@ export class UpdateCommand {
             const skillDir = path.join(skillsDir, dirName);
             const skillFile = path.join(skillDir, 'SKILL.md');
 
-            // Build overlay transformer from active plugins, then compose it with
-            // upstream's per-tool command-reference transformer (which supersedes the
-            // fork's hand-rolled hyphen-command special case).
-            const overlayContents = workflowOverlays.get(workflowId)?.contents ?? [];
-            const overlayTransformer = overlayContents.length > 0
-              ? (s: string) => s + '\n\n' + overlayContents.join('\n\n')
-              : undefined;
-            const transformer = composeTransformers(
-              overlayTransformer,
+            // Overlays first, then upstream's per-tool command-reference
+            // transformer (which supersedes the fork's hand-rolled hyphen-command
+            // special case), so references inside overlay text are rewritten too.
+            const skillContent = generateOverlaidSkillContent(
+              template,
+              workflowId,
+              OPENSPEC_VERSION,
+              workflowOverlays,
               getTransformerForTool(
                 tool.value,
                 delivery,
@@ -352,11 +335,6 @@ export class UpdateCommand {
                 resolveCommandInvocation(tool.value)
               )
             );
-            // Superseded base sections are dropped before the overlay transformer
-            // appends, so the overlay replaces them rather than following them.
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer, {
-              supersedes: supersedesFor(workflowId),
-            });
             FileSystemUtils.assertPathWithin(skillsRoot, skillFile);
             await FileSystemUtils.writeFile(skillFile, skillContent);
           }
@@ -931,7 +909,8 @@ export class UpdateCommand {
   private async handleLegacyCleanup(
     projectPath: string,
     desiredWorkflows: readonly (typeof ALL_WORKFLOWS)[number][],
-    delivery: Delivery
+    delivery: Delivery,
+    overlays: WorkflowOverlays
   ): Promise<LegacyUpgradeResult> {
     // Detect legacy artifacts
     const detection = await detectLegacyArtifacts(projectPath);
@@ -963,7 +942,8 @@ export class UpdateCommand {
         detection,
         canPrompt,
         desiredWorkflows,
-        delivery
+        delivery,
+        overlays
       );
       await this.performImmediateLegacyCleanup(
         projectPath,
@@ -1000,7 +980,8 @@ export class UpdateCommand {
         detection,
         canPrompt,
         desiredWorkflows,
-        delivery
+        delivery,
+        overlays
       );
       await this.performImmediateLegacyCleanup(
         projectPath,
@@ -1102,7 +1083,8 @@ export class UpdateCommand {
     detection: LegacyDetectionResult,
     canPrompt: boolean,
     desiredWorkflows: readonly (typeof ALL_WORKFLOWS)[number][],
-    delivery: Delivery
+    delivery: Delivery,
+    overlays: WorkflowOverlays
   ): Promise<LegacyUpgradeResult> {
     // Get tools that had legacy artifacts
     const legacyTools = getToolsFromLegacyArtifacts(detection);
@@ -1209,7 +1191,9 @@ export class UpdateCommand {
           workflowOverrides[tool.value] = inferredCodexWorkflows;
         }
         const skillTemplates = getSkillTemplates(toolWorkflows);
-        const commandContents = getCommandContents(toolWorkflows);
+        // Same overlay rendering as the main loop: without --force the main loop
+        // skips a tool this upgrade just made current, so these writes ship.
+        const commandContents = getOverlaidCommandContents(toolWorkflows, overlays);
 
         // Never overwrite a shared skills root owned by another tool. A tool
         // with its own command surface can still install those commands: this
@@ -1235,17 +1219,22 @@ export class UpdateCommand {
 
         // Create skill files when delivery includes skills
         if (shouldGenerateSkills && writesSkills) {
-          for (const { template, dirName } of skillTemplates) {
+          for (const { template, dirName, workflowId } of skillTemplates) {
             const skillDir = path.join(skillsDir, dirName);
             const skillFile = path.join(skillDir, 'SKILL.md');
 
-            const transformer = getTransformerForTool(
-              tool.value,
-              delivery,
-              resolveCommandSurfaceCapability(tool.value),
-              resolveCommandInvocation(tool.value)
+            const skillContent = generateOverlaidSkillContent(
+              template,
+              workflowId,
+              OPENSPEC_VERSION,
+              overlays,
+              getTransformerForTool(
+                tool.value,
+                delivery,
+                resolveCommandSurfaceCapability(tool.value),
+                resolveCommandInvocation(tool.value)
+              )
             );
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer);
             FileSystemUtils.assertPathWithin(skillsRoot, skillFile);
             await FileSystemUtils.writeFile(skillFile, skillContent);
           }
@@ -1292,52 +1281,4 @@ export class UpdateCommand {
 
     return { newlyConfiguredTools: newlyConfigured, workflowOverrides, skippedSharedSkillTools };
   }
-}
-
-/**
- * Overlays active for one workflow: appended contents in plugin whitelist
- * order, and the union of base sections they supersede.
- */
-interface WorkflowOverlay {
-  contents: string[];
-  supersedes: string[];
-}
-
-/**
- * Collects every workflow's overlays once and validates `supersedes` against
- * the base templates (skill and command) of that workflow. Fails closed: an
- * unknown section name, or `supersedes` on a workflow with no base template,
- * throws with the offending names instead of being skipped.
- */
-function resolveWorkflowOverlays(plugins: LoadedPlugin[]): Map<string, WorkflowOverlay> {
-  const workflowIds = new Set<string>();
-  for (const plugin of plugins) {
-    for (const workflowId of Object.keys(plugin.manifest.skill_overlays ?? {})) {
-      workflowIds.add(workflowId);
-    }
-  }
-
-  const overlays = new Map<string, WorkflowOverlay>();
-  for (const workflowId of workflowIds) {
-    const entries = getPluginOverlayEntries(plugins, workflowId);
-    if (entries.length === 0) continue;
-    const supersedes = [...new Set(entries.flatMap((entry) => entry.supersedes))];
-    overlays.set(workflowId, { contents: entries.map((entry) => entry.content), supersedes });
-
-    if (supersedes.length === 0) continue;
-    const skills = getSkillTemplates([workflowId]);
-    const commands = getCommandTemplates([workflowId]);
-    if (skills.length === 0 && commands.length === 0) {
-      throw new Error(
-        `Overlay for unknown workflow "${workflowId}" supersedes section(s): ${supersedes.join(', ')}.`
-      );
-    }
-    for (const { template } of skills) {
-      stripSections(template.instructions, supersedes, `${workflowId} skill`);
-    }
-    for (const { template } of commands) {
-      stripSections(template.content, supersedes, `${workflowId} command`);
-    }
-  }
-  return overlays;
 }
