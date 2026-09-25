@@ -29,9 +29,12 @@
  *     OPENSPEC_NO_AUTO_CONFIG, OPENSPEC_NO_COMPLETIONS, OPENSPEC_CONCURRENCY,
  *     OPENSPEC_NO_ANIMATION, OPENSPEC_ENABLE_CLI_AGENT_OPENERS,
  *     OPEN_SPEC_INTERACTIVE
- *   Not neutralized (stubbed per test where it matters): SHELL, PSModulePath,
- *   EDITOR / VISUAL, TERM_PROGRAM / WT_SESSION, npm_config_* (npm sets these
- *   for `npm test` itself).
+ *   Not neutralized (stubbed per test where it matters): SHELL, COMSPEC,
+ *   PSModulePath, EDITOR / VISUAL, TERM_PROGRAM / WT_SESSION, NODE_ENV,
+ *   npm_config_* (npm sets these for `npm test` itself), and CI — CI is kept on
+ *   purpose so CI runs exercise the non-interactive path; locally it is usually
+ *   unset, so interactive / telemetry / version-check branches can differ
+ *   between local and CI runs.
  *   (OPENSPEC_TELEMETRY / DO_NOT_TRACK are pinned by vitest.config.ts `env`.)
  *
  * Setup files run in the worker before the test file is imported, so chalk and
