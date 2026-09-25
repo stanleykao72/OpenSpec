@@ -157,6 +157,14 @@ export function composeTransformers(
 export interface SkillContentOptions {
   /** Base sections an overlay replaces; dropped before any transformer runs. */
   supersedes?: readonly string[];
+  /** Names the template in section errors (default: `<template name> skill`). */
+  label?: string;
+  /**
+   * Fingerprint of the project's plugin overlays. When non-empty it is
+   * recorded as `metadata.overlays`, so up-to-date detection notices an
+   * overlay change; plugin-less output is unchanged.
+   */
+  overlayFingerprint?: string;
 }
 
 export function generateSkillContent(
@@ -167,8 +175,15 @@ export function generateSkillContent(
 ): string {
   // Section markers are resolved first, so they never reach a generated skill
   // and an overlay transformer appends to the already-stripped base.
-  const base = stripSections(template.instructions, options.supersedes ?? [], `${template.name} skill`);
+  const base = stripSections(
+    template.instructions,
+    options.supersedes ?? [],
+    options.label ?? `${template.name} skill`
+  );
   const instructions = transformInstructions ? transformInstructions(base) : base;
+  const overlaysLine = options.overlayFingerprint
+    ? `\n  overlays: "${options.overlayFingerprint}"`
+    : '';
 
   return `---
 name: ${template.name}
@@ -179,7 +194,7 @@ compatibility: ${template.compatibility || 'Requires openspec CLI.'}
 metadata:
   author: ${template.metadata?.author || 'openspec'}
   version: "${template.metadata?.version || '1.0'}"
-  generatedBy: "${generatedByVersion}"
+  generatedBy: "${generatedByVersion}"${overlaysLine}
 ---
 
 ${instructions}

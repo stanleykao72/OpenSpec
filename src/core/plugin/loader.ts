@@ -297,68 +297,81 @@ export function loadPlugins(
 }
 
 /**
- * One active overlay for a workflow: its appended content and the base-template
- * sections it replaces.
+ * One overlay a plugin declares for a workflow.
  */
 export interface PluginOverlayEntry {
-  content: string;
+  /** Declaring plugin, for error and conflict messages. */
+  pluginName: string;
+  /** Absolute path of the append file. */
+  path: string;
+  /** File content, or null when the file does not exist (a warning is printed). */
+  content: string | null;
+  /** Base-template sections the overlay replaces. */
   supersedes: string[];
 }
 
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
 /**
- * Collects the overlays for a specific workflow from all active plugins, in
- * plugin whitelist order.
- * Warns (but continues) if a declared overlay file doesn't exist; such an
- * overlay contributes neither content nor supersedes, because dropping base
- * sections with nothing appended in their place would leave no procedure.
+ * Resolves an overlay's append path, refusing one that leaves the plugin
+ * directory, lexically (`../`, absolute) or through a symlink.
+ */
+function resolveOverlayFile(plugin: LoadedPlugin, workflowId: string, append: string): string {
+  const root = path.resolve(plugin.dir);
+  const target = path.resolve(root, append);
+  const escapes = () =>
+    new PluginLoadError(
+      `Plugin '${plugin.manifest.name}' overlay for '${workflowId}' (append: ${append}) resolves outside the plugin directory`,
+      plugin.manifest.name
+    );
+
+  if (!isWithin(root, target)) throw escapes();
+  if (fs.existsSync(target) && !isWithin(fs.realpathSync(root), fs.realpathSync(target))) {
+    throw escapes();
+  }
+  return target;
+}
+
+/**
+ * Collects the overlays every active plugin declares for a workflow, in plugin
+ * whitelist order. Only a plugin's own `skill_overlays` keys count, never
+ * inherited ones such as `constructor`.
+ *
+ * A missing append file yields `content: null` with a warning; the entry is
+ * kept so the caller can still validate and reject its `supersedes`.
+ *
+ * @throws PluginLoadError when an append path leaves its plugin directory
  */
 export function getPluginOverlayEntries(
-  plugins: LoadedPlugin[],
+  plugins: readonly LoadedPlugin[],
   workflowId: string
 ): PluginOverlayEntry[] {
   const entries: PluginOverlayEntry[] = [];
 
   for (const plugin of plugins) {
-    const overlay = plugin.manifest.skill_overlays?.[workflowId];
-    if (!overlay) continue;
-    const overlayPath = path.join(plugin.dir, overlay.append);
+    const overlays = plugin.manifest.skill_overlays;
+    if (!overlays || !Object.hasOwn(overlays, workflowId)) continue;
+    const overlay = overlays[workflowId];
+    const overlayPath = resolveOverlayFile(plugin, workflowId, overlay.append);
 
+    let content: string | null = null;
     try {
-      const content = fs.readFileSync(overlayPath, 'utf-8');
-      entries.push({ content, supersedes: [...(overlay.supersedes ?? [])] });
+      content = fs.readFileSync(overlayPath, 'utf-8');
     } catch {
       console.warn(
         `[plugin:${plugin.manifest.name}] Overlay file not found: ${overlayPath}`
       );
     }
+    entries.push({
+      pluginName: plugin.manifest.name,
+      path: overlayPath,
+      content,
+      supersedes: [...(overlay.supersedes ?? [])],
+    });
   }
 
   return entries;
-}
-
-/**
- * Collects overlay content for a specific workflow from all active plugins.
- * Returns overlay contents in plugin whitelist order.
- * Warns (but continues) if a declared overlay file doesn't exist.
- */
-export function getPluginOverlays(
-  plugins: LoadedPlugin[],
-  workflowId: string
-): string[] {
-  return getPluginOverlayEntries(plugins, workflowId).map((entry) => entry.content);
-}
-
-/**
- * Base-template sections superseded for a workflow by the active overlays:
- * the de-duplicated union across plugins, in whitelist order.
- */
-export function getPluginSupersedes(
-  plugins: LoadedPlugin[],
-  workflowId: string
-): string[] {
-  const names = new Set<string>();
-  for (const entry of getPluginOverlayEntries(plugins, workflowId)) {
-    for (const name of entry.supersedes) names.add(name);
-  }
-  return [...names];
 }

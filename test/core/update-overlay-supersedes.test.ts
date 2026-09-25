@@ -5,7 +5,7 @@ import os from 'os';
 
 import { UpdateCommand } from '../../src/core/update.js';
 import { InitCommand } from '../../src/core/init.js';
-import { clearPluginCache } from '../../src/core/plugin/context.js';
+import { clearPluginCache, getLoadedPlugins } from '../../src/core/plugin/context.js';
 import { FileSystemUtils } from '../../src/utils/file-system.js';
 import { loadProjectOverlays } from '../../src/core/shared/overlay-generation.js';
 import { areCommandFilesUpToDate, getToolVersionStatus } from '../../src/core/shared/tool-detection.js';
@@ -290,12 +290,97 @@ describe('overlay supersedes across generation entry points', () => {
     expect(skill).not.toContain('opsx:section');
   });
 
-  it('a whitelisted plugin that fails to load is skipped with a warning, not fatal', async () => {
+  // A whitelisted plugin that cannot be loaded must stop generation: before,
+  // getLoadedPlugins warned and returned [] for the whole whitelist, so update
+  // and init rewrote every overlaid skill as bare base text and exited 0.
+  const SCHEMA_INVALID_MANIFESTS: Record<string, string> = {
+    'scalar supersedes': 'supersedes: apply-inline-loop',
+    'empty-string supersedes entry': 'supersedes:\n      - ""',
+    'misspelled supersedes key': 'supersede:\n      - apply-inline-loop',
+  };
+
+  async function writeRawManifest(overlayExtra: string): Promise<void> {
+    await writeFixturePlugin({ apply: { append: 'overlays/apply.md' } });
+    await fs.writeFile(
+      path.join(testDir, 'openspec', 'plugins', 'fixture-lifecycle', 'plugin.yaml'),
+      `name: fixture-lifecycle\nversion: 1.0.0\nskill_overlays:\n  apply:\n    append: overlays/apply.md\n    ${overlayExtra}\n`
+    );
+  }
+
+  for (const [label, extra] of Object.entries(SCHEMA_INVALID_MANIFESTS)) {
+    it(`update fails and keeps the overlaid skill when the manifest has a ${label}`, async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      const skillPath = path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md');
+      const overlaid = await fs.readFile(skillPath, 'utf-8');
+      expectSupersededApply(overlaid, 'before');
+
+      await writeRawManifest(extra);
+      clearPluginCache();
+
+      await expect(new UpdateCommand({ force: true }).execute(testDir)).rejects.toThrow(/fixture-lifecycle/);
+      expect(await fs.readFile(skillPath, 'utf-8')).toBe(overlaid);
+    });
+
+    it(`init fails before writing skills when the manifest has a ${label}`, async () => {
+      await writeRawManifest(extra);
+
+      await expect(new InitCommand({ tools: 'claude', force: true }).execute(testDir)).rejects.toThrow(
+        /fixture-lifecycle/
+      );
+      await expect(
+        fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  }
+
+  it('update and init fail when a whitelisted plugin is not installed', async () => {
     await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\nplugins:\n  - missing-plugin\n');
 
-    const overlays = loadProjectOverlays(testDir);
+    expect(() => loadProjectOverlays(testDir)).toThrow(/missing-plugin/);
+    await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/missing-plugin/);
+    await expect(new InitCommand({ tools: 'claude', force: true }).execute(testDir)).rejects.toThrow(/missing-plugin/);
+  });
 
-    expect(overlays.contentsFor('apply')).toEqual([]);
+  it('update fails when plugin config validation would drop a whitelisted plugin', async () => {
+    await writeFixturePlugin(SUPERSEDING_APPLY);
+    const manifestPath = path.join(testDir, 'openspec', 'plugins', 'fixture-lifecycle', 'plugin.yaml');
+    await fs.appendFile(manifestPath, 'config:\n  vault:\n    name:\n      type: string\n      required: true\n');
+
+    await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/fixture-lifecycle/);
+  });
+
+  it('other commands keep the lenient loader: a broken plugin is warned about and skipped', async () => {
+    await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\nplugins:\n  - missing-plugin\n');
+
+    expect(getLoadedPlugins(testDir)).toEqual([]);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('missing-plugin'));
+    // A lenient call that cached [] must not let a later strict call pass.
+    expect(() => getLoadedPlugins(testDir, { strict: true })).toThrow(/missing-plugin/);
+  });
+
+  it('an invalid overlay fails update before any migration moves files', async () => {
+    await writeFixturePlugin({ apply: { append: 'overlays/apply.md', supersedes: ['no-such-section'] } });
+    const legacySkill = path.join(testDir, '.kimi', 'skills', 'openspec-explore', 'SKILL.md');
+    await fs.mkdir(path.dirname(legacySkill), { recursive: true });
+    await fs.writeFile(legacySkill, '---\nname: openspec-explore\nmetadata:\n  author: openspec\n---\n\nOld\n');
+
+    await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/no-such-section/);
+
+    expect(await fs.readFile(legacySkill, 'utf-8')).toContain('Old');
+    await expect(fs.stat(path.join(testDir, '.kimi-code'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('update rejects overlay content carrying section markers, before writing', async () => {
+    await writeFixturePlugin({ apply: { append: 'overlays/apply.md' } });
+    await fs.writeFile(
+      path.join(testDir, 'openspec', 'plugins', 'fixture-lifecycle', 'overlays', 'apply.md'),
+      '## Mine\n<!-- opsx:section mine -->\nx\n<!-- /opsx:section mine -->\n'
+    );
+
+    await expect(new UpdateCommand().execute(testDir)).rejects.toThrow(/opsx:section/);
+    await expect(
+      fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

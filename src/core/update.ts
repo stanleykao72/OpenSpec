@@ -143,6 +143,13 @@ export class UpdateCommand {
       throw new Error(`No OpenSpec directory found. Run 'openspec init' first.`);
     }
 
+    // 1b. Resolve plugin skill overlays once, for every write below (the main
+    //     loop, the legacy upgrade and the up-to-date checks). This runs before
+    //     any migration touches the filesystem: a whitelisted plugin that cannot
+    //     be loaded, or an invalid overlay, fails the update here, before any
+    //     write at all.
+    const workflowOverlays = loadProjectOverlays(resolvedProjectPath);
+
     // 2. Migrate OpenSpec-managed skills left in renamed tool directories
     // (e.g. .kimi -> .kimi-code) so they stay detected and get refreshed,
     // then perform the one-time profile migration if needed before any
@@ -168,11 +175,6 @@ export class UpdateCommand {
       (ALL_WORKFLOWS as readonly string[]).includes(workflow)
     );
 
-    // 3b. Resolve plugin skill overlays once, for every write below (the main
-    //     loop and the legacy upgrade). A plugin that fails to load is warned
-    //     about and skipped; an overlay that supersedes a base section the
-    //     template does not define fails the update here, before any write.
-    const workflowOverlays = loadProjectOverlays(resolvedProjectPath);
 
     // 4. Detect and handle legacy artifacts + upgrade legacy tools using effective config
     const legacyUpgrade = await this.handleLegacyCleanup(

@@ -32,9 +32,7 @@ export {
   getUserPluginsDir,
   getPackagePluginsDir,
   PluginLoadError,
-  getPluginOverlays,
   getPluginOverlayEntries,
-  getPluginSupersedes,
   type PluginOverlayEntry,
 } from './loader.js';
 

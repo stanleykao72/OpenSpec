@@ -8,11 +8,11 @@
  * without section markers, then every active overlay appended.
  */
 
-import chalk from 'chalk';
+import { createHash } from 'node:crypto';
 
 import type { CommandContent } from '../command-generation/index.js';
 import { getLoadedPlugins } from '../plugin/context.js';
-import { getPluginOverlayEntries } from '../plugin/loader.js';
+import { getPluginOverlayEntries, type PluginOverlayEntry } from '../plugin/loader.js';
 import type { LoadedPlugin } from '../plugin/types.js';
 import {
   composeTransformers,
@@ -21,7 +21,7 @@ import {
   getCommandTemplates,
   getSkillTemplates,
 } from './skill-generation.js';
-import { stripSections } from './template-sections.js';
+import { hasSectionMarkers, stripSections } from './template-sections.js';
 import type { SkillTemplate } from '../templates/skill-templates.js';
 
 /**
@@ -32,20 +32,66 @@ export interface WorkflowOverlays {
   contentsFor(workflowId: string): readonly string[];
   /** Base sections the overlays replace (union across plugins). */
   supersedesFor(workflowId: string): readonly string[];
+  /**
+   * Short hash of every workflow's overlay contents and supersedes; empty when
+   * there are none. Stamped into generated skills so a changed overlay makes a
+   * skill-bearing tool stale even when the OpenSpec version did not move.
+   */
+  fingerprint: string;
 }
 
 /** No active plugins: the base templates render as-is (markers removed). */
 export const NO_OVERLAYS: WorkflowOverlays = {
   contentsFor: () => [],
   supersedesFor: () => [],
+  fingerprint: '',
 };
 
+/** Label naming a template in section errors; the same at every call site. */
+export function sectionLabel(workflowId: string, surface: 'skill' | 'command'): string {
+  return `${workflowId} ${surface}`;
+}
+
+function describeEntry(entry: PluginOverlayEntry, workflowId: string): string {
+  return `plugin '${entry.pluginName}' overlay for '${workflowId}' (${entry.path})`;
+}
+
 /**
- * Collects every workflow's overlays once and validates `supersedes` against
- * the base templates (skill and command) of that workflow.
+ * Validates `supersedes` names against the workflow's skill and command base
+ * templates; throws naming the unknown ones.
+ */
+function assertSectionsExist(workflowId: string, names: readonly string[], owner: string): void {
+  if (names.length === 0) return;
+  const skills = getSkillTemplates([workflowId]);
+  const commands = getCommandTemplates([workflowId]);
+  try {
+    if (skills.length === 0 && commands.length === 0) {
+      throw new Error(`workflow "${workflowId}" has no base template; cannot supersede ${names.join(', ')}`);
+    }
+    for (const { template } of skills) {
+      stripSections(template.instructions, names, sectionLabel(workflowId, 'skill'));
+    }
+    for (const { template } of commands) {
+      stripSections(template.content, names, sectionLabel(workflowId, 'command'));
+    }
+  } catch (err) {
+    throw new Error(`${owner}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Collects every workflow's overlays once and validates them. Fails closed,
+ * naming the plugin, workflow and file, when:
+ * - `supersedes` names a section the workflow's base templates do not define
+ *   (checked even when the append file is missing);
+ * - an overlay declares `supersedes` but its append file is missing or empty,
+ *   which would drop base sections with nothing in their place;
+ * - overlay content carries section markers, which would leak into output.
  *
- * Fails closed: an unknown section name, or `supersedes` on a workflow with no
- * base template, throws with the offending names instead of being skipped.
+ * An empty or missing overlay that supersedes nothing is skipped with a
+ * warning. Conflicts between plugins are warned about, naming the plugins:
+ * two plugins superseding the same section, and a plugin appending to a
+ * workflow whose sections another plugin removed.
  */
 export function resolveWorkflowOverlays(plugins: readonly LoadedPlugin[]): WorkflowOverlays {
   const workflowIds = new Set<string>();
@@ -57,54 +103,89 @@ export function resolveWorkflowOverlays(plugins: readonly LoadedPlugin[]): Workf
   if (workflowIds.size === 0) return NO_OVERLAYS;
 
   const byWorkflow = new Map<string, { contents: string[]; supersedes: string[] }>();
-  for (const workflowId of workflowIds) {
-    const entries = getPluginOverlayEntries([...plugins], workflowId);
-    if (entries.length === 0) continue;
-    const supersedes = [...new Set(entries.flatMap((entry) => entry.supersedes))];
-    byWorkflow.set(workflowId, { contents: entries.map((entry) => entry.content), supersedes });
+  for (const workflowId of [...workflowIds].sort()) {
+    const active: PluginOverlayEntry[] = [];
 
-    if (supersedes.length === 0) continue;
-    const skills = getSkillTemplates([workflowId]);
-    const commands = getCommandTemplates([workflowId]);
-    if (skills.length === 0 && commands.length === 0) {
-      throw new Error(
-        `Overlay for unknown workflow "${workflowId}" supersedes section(s): ${supersedes.join(', ')}.`
-      );
+    for (const entry of getPluginOverlayEntries(plugins, workflowId)) {
+      const owner = describeEntry(entry, workflowId);
+      assertSectionsExist(workflowId, entry.supersedes, owner);
+
+      const empty = entry.content === null || entry.content.trim() === '';
+      if (empty) {
+        if (entry.supersedes.length > 0) {
+          throw new Error(
+            `${owner} supersedes ${entry.supersedes.join(', ')} but its append file is missing or empty; ` +
+              'dropping those base sections would leave nothing in their place.'
+          );
+        }
+        if (entry.content !== null) {
+          console.warn(`[plugin:${entry.pluginName}] Overlay file is empty, skipping: ${entry.path}`);
+        }
+        continue;
+      }
+      if (hasSectionMarkers(entry.content!)) {
+        throw new Error(
+          `${owner} contains <!-- opsx:section --> markers; overlays cannot define sections ` +
+            '(mention the syntax in inline code or a code fence instead).'
+        );
+      }
+      active.push(entry);
     }
-    for (const { template } of skills) {
-      stripSections(template.instructions, supersedes, `${workflowId} skill`);
+    if (active.length === 0) continue;
+
+    const removedBy = new Map<string, string[]>();
+    for (const entry of active) {
+      for (const name of entry.supersedes) {
+        removedBy.set(name, [...(removedBy.get(name) ?? []), entry.pluginName]);
+      }
     }
-    for (const { template } of commands) {
-      stripSections(template.content, supersedes, `${workflowId} command`);
+    for (const [section, owners] of removedBy) {
+      if (owners.length > 1) {
+        console.warn(
+          `Overlay conflict: section '${section}' of workflow '${workflowId}' is superseded by several plugins: ${owners.join(', ')}. ` +
+            'Each appends its own replacement.'
+        );
+      }
     }
+    if (removedBy.size > 0) {
+      const removals = [...removedBy].map(([section, owners]) => `${section} (by ${owners.join(', ')})`).join(', ');
+      for (const entry of active.filter((candidate) => candidate.supersedes.length === 0)) {
+        console.warn(
+          `Overlay conflict: plugin '${entry.pluginName}' appends to workflow '${workflowId}', whose base section(s) ${removals} were removed; ` +
+            'its overlay must not rely on them.'
+        );
+      }
+    }
+
+    byWorkflow.set(workflowId, {
+      contents: active.map((entry) => entry.content!),
+      supersedes: [...removedBy.keys()],
+    });
   }
+
+  if (byWorkflow.size === 0) return NO_OVERLAYS;
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([...byWorkflow].map(([id, overlay]) => [id, overlay.contents, overlay.supersedes])))
+    .digest('hex')
+    .slice(0, 16);
 
   return {
     contentsFor: (workflowId) => byWorkflow.get(workflowId)?.contents ?? [],
     supersedesFor: (workflowId) => byWorkflow.get(workflowId)?.supersedes ?? [],
+    fingerprint,
   };
 }
 
 /**
- * Loads the project's enabled plugins and resolves their overlays.
+ * Loads the project's whitelisted plugins and resolves their overlays.
  *
  * A project with no `openspec/config.yaml` (a fresh `init`) or no `plugins:`
- * list has no overlays; that is not an error. A plugin that fails to load is
- * warned about and skipped, matching how hooks and gates treat it. An invalid
- * `supersedes` is NOT softened: it throws, so generation stops before writing.
+ * list has no overlays; that is not an error. Everything else fails closed:
+ * a whitelisted plugin that cannot be loaded or validated, and any invalid
+ * overlay, throws, so generation stops before writing.
  */
 export function loadProjectOverlays(projectRoot: string): WorkflowOverlays {
-  let plugins: LoadedPlugin[] = [];
-  try {
-    plugins = getLoadedPlugins(projectRoot);
-  } catch (err) {
-    console.warn(
-      chalk.yellow(
-        `Plugin loading failed, continuing without overlays: ${err instanceof Error ? err.message : String(err)}`
-      )
-    );
-  }
-  return resolveWorkflowOverlays(plugins);
+  return resolveWorkflowOverlays(getLoadedPlugins(projectRoot, { strict: true }));
 }
 
 /**
@@ -144,6 +225,10 @@ export function generateOverlaidSkillContent(
     template,
     generatedByVersion,
     composeTransformers(overlayTransformer, toolTransformer),
-    { supersedes: overlays.supersedesFor(workflowId) }
+    {
+      supersedes: overlays.supersedesFor(workflowId),
+      label: sectionLabel(workflowId, 'skill'),
+      overlayFingerprint: overlays.fingerprint,
+    }
   );
 }
