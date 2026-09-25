@@ -25,6 +25,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     globalSetup: './vitest.setup.ts',
+    // Isolate each test file from the developer's HOME, color forcing and
+    // shell-specific variables (see test/setup-env.ts).
+    setupFiles: ['./test/setup-env.ts'],
     // Opt the suite out of telemetry. Many tests spawn the real CLI, which runs
     // the preAction hook like any user invocation: it would persist an
     // anonymousId into the developer's *real* global config and POST a
@@ -36,6 +39,8 @@ export default defineConfig({
       DO_NOT_TRACK: '1',
     },
     // Tests rely on per-file process isolation (e.g., `process.cwd()` assumptions).
+    // test/setup-env.ts also requires forks: os.homedir() only honours the
+    // isolated $HOME in a child process, and the setup file throws otherwise.
     pool: 'forks',
     maxWorkers: resolveMaxWorkers(),
     include: ['test/**/*.test.ts'],
