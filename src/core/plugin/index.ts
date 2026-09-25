@@ -32,7 +32,6 @@ export {
   getUserPluginsDir,
   getPackagePluginsDir,
   PluginLoadError,
-  resolveOverlayPaths,
   getPluginOverlays,
   getPluginOverlayEntries,
   getPluginSupersedes,

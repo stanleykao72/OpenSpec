@@ -297,23 +297,6 @@ export function loadPlugins(
 }
 
 /**
- * Resolves overlay file paths for a loaded plugin.
- * Returns a map of workflow ID → absolute file path.
- */
-export function resolveOverlayPaths(
-  plugin: LoadedPlugin
-): Map<string, string> {
-  const result = new Map<string, string>();
-  const overlays = plugin.manifest.skill_overlays;
-  if (!overlays) return result;
-
-  for (const [workflowId, overlay] of Object.entries(overlays)) {
-    result.set(workflowId, path.join(plugin.dir, overlay.append));
-  }
-  return result;
-}
-
-/**
  * One active overlay for a workflow: its appended content and the base-template
  * sections it replaces.
  */

@@ -9,7 +9,6 @@ import {
   parsePluginManifest,
   loadPlugins,
   PluginLoadError,
-  resolveOverlayPaths,
   getPluginOverlays,
   getPluginOverlayEntries,
   getPluginSupersedes,
@@ -165,51 +164,6 @@ describe('plugin/loader', () => {
       expect(() =>
         loadPlugins(tempDir, ['nonexistent'])
       ).toThrow(/not found/);
-    });
-  });
-
-  describe('resolveOverlayPaths', () => {
-    it('should return resolved paths for plugin with overlays', () => {
-      const pluginDir = path.join(tempDir, 'overlay-plugin');
-      createPluginYaml(pluginDir, {
-        name: 'overlay-plugin',
-        version: '1.0.0',
-        skill_overlays: {
-          apply: { append: 'overlays/apply.md' },
-          explore: { append: 'overlays/explore.md' },
-        },
-      });
-
-      const plugin: LoadedPlugin = {
-        manifest: parsePluginManifest(pluginDir),
-        dir: pluginDir,
-        source: 'project',
-        config: {},
-      };
-
-      const paths = resolveOverlayPaths(plugin);
-
-      expect(paths.size).toBe(2);
-      expect(paths.get('apply')).toBe(path.join(pluginDir, 'overlays', 'apply.md'));
-      expect(paths.get('explore')).toBe(path.join(pluginDir, 'overlays', 'explore.md'));
-    });
-
-    it('should return empty map for plugin without overlays', () => {
-      const pluginDir = path.join(tempDir, 'no-overlay-plugin');
-      createPluginYaml(pluginDir, {
-        name: 'no-overlay-plugin',
-        version: '1.0.0',
-      });
-
-      const plugin: LoadedPlugin = {
-        manifest: parsePluginManifest(pluginDir),
-        dir: pluginDir,
-        source: 'project',
-        config: {},
-      };
-
-      const paths = resolveOverlayPaths(plugin);
-      expect(paths.size).toBe(0);
     });
   });
 
