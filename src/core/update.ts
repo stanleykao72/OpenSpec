@@ -20,18 +20,18 @@ import {
 import {
   getToolVersionStatus,
   getSkillTemplates,
-  getCommandContents,
-  generateSkillContent,
-  composeTransformers,
   getToolsWithSkillsDir,
   hasGlobalSkillTarget,
   resolveToolSkillsDir,
   toolSupportsSkills,
   type ToolVersionStatus,
 } from './shared/index.js';
-import { getLoadedPlugins } from './plugin/context.js';
-import { getPluginOverlays } from './plugin/loader.js';
-import type { LoadedPlugin } from './plugin/types.js';
+import {
+  loadProjectOverlays,
+  getOverlaidCommandContents,
+  generateOverlaidSkillContent,
+  type WorkflowOverlays,
+} from './shared/overlay-generation.js';
 import {
   detectLegacyArtifacts,
   cleanupLegacyArtifacts,
@@ -143,6 +143,13 @@ export class UpdateCommand {
       throw new Error(`No OpenSpec directory found. Run 'openspec init' first.`);
     }
 
+    // 1b. Resolve plugin skill overlays once, for every write below (the main
+    //     loop, the legacy upgrade and the up-to-date checks). This runs before
+    //     any migration touches the filesystem: a whitelisted plugin that cannot
+    //     be loaded, or an invalid overlay, fails the update here, before any
+    //     write at all.
+    const workflowOverlays = loadProjectOverlays(resolvedProjectPath);
+
     // 2. Migrate OpenSpec-managed skills left in renamed tool directories
     // (e.g. .kimi -> .kimi-code) so they stay detected and get refreshed,
     // then perform the one-time profile migration if needed before any
@@ -168,19 +175,13 @@ export class UpdateCommand {
       (ALL_WORKFLOWS as readonly string[]).includes(workflow)
     );
 
-    // 3b. Load plugins for skill overlays (warn and continue on failure)
-    let loadedPlugins: LoadedPlugin[] = [];
-    try {
-      loadedPlugins = getLoadedPlugins(resolvedProjectPath);
-    } catch (err) {
-      console.warn(chalk.yellow(`Plugin loading failed, continuing without overlays: ${err instanceof Error ? err.message : String(err)}`));
-    }
 
     // 4. Detect and handle legacy artifacts + upgrade legacy tools using effective config
     const legacyUpgrade = await this.handleLegacyCleanup(
       resolvedProjectPath,
       desiredWorkflows,
-      delivery
+      delivery,
+      workflowOverlays
     );
     const {
       newlyConfiguredTools,
@@ -224,6 +225,7 @@ export class UpdateCommand {
     const toolStatuses = configuredTools.map((toolId) =>
       getToolVersionStatus(resolvedProjectPath, toolId, OPENSPEC_VERSION, {
         workflows: legacyWorkflowOverrides[toolId] ?? desiredWorkflows,
+        overlays: workflowOverlays,
       })
     );
     const statusByTool = new Map(toolStatuses.map((status) => [status.toolId, status] as const));
@@ -257,6 +259,7 @@ export class UpdateCommand {
       }
       // All tools are up to date
       this.displayUpToDateMessage(toolStatuses);
+      this.displayGlobalOverlayHints(toolStatuses, toolsToUpdateSet);
       await this.syncCopilotCloudFiles(resolvedProjectPath, configuredAndNewTools);
 
       // Still check for new tool directories and extra workflows
@@ -274,6 +277,9 @@ export class UpdateCommand {
       console.log('No additional refresh needed after legacy migration.');
     } else {
       this.displayUpdatePlan([...toolsToUpdateSet], statusByTool, toolsUpToDate);
+    }
+    if (!this.force) {
+      this.displayGlobalOverlayHints(toolStatuses, toolsToUpdateSet);
     }
     console.log();
 
@@ -310,18 +316,10 @@ export class UpdateCommand {
         const writesSkills = !tool.skillsDir || sharedSkillWriters.has(tool.value);
         const toolWorkflows = legacyWorkflowOverrides[tool.value] ?? desiredWorkflows;
         const skillTemplates = getSkillTemplates(toolWorkflows);
-        const commandContents = getCommandContents(toolWorkflows);
-        // Fork plugin/gate system: apply plugin overlays to command bodies. Upstream
-        // moved command generation into the per-tool loop, so the overlay pass moved
-        // with it — applying it once globally would now miss every tool.
-        if (loadedPlugins.length > 0) {
-          for (const cmd of commandContents) {
-            const overlayContents = getPluginOverlays(loadedPlugins, cmd.id);
-            if (overlayContents.length > 0) {
-              cmd.body = cmd.body + '\n\n' + overlayContents.join('\n\n');
-            }
-          }
-        }
+        // Fork plugin/gate system: overlays (supersedes + append) are applied per
+        // tool through the shared renderer that init, the legacy upgrade and
+        // command up-to-date detection also use.
+        const commandContents = getOverlaidCommandContents(toolWorkflows, workflowOverlays);
 
         // Generate skill files if delivery includes skills
         if (shouldGenerateSkills && writesSkills) {
@@ -329,15 +327,14 @@ export class UpdateCommand {
             const skillDir = path.join(skillsDir, dirName);
             const skillFile = path.join(skillDir, 'SKILL.md');
 
-            // Build overlay transformer from active plugins, then compose it with
-            // upstream's per-tool command-reference transformer (which supersedes the
-            // fork's hand-rolled hyphen-command special case).
-            const overlayContents = getPluginOverlays(loadedPlugins, workflowId);
-            const overlayTransformer = overlayContents.length > 0
-              ? (s: string) => s + '\n\n' + overlayContents.join('\n\n')
-              : undefined;
-            const transformer = composeTransformers(
-              overlayTransformer,
+            // Overlays first, then upstream's per-tool command-reference
+            // transformer (which supersedes the fork's hand-rolled hyphen-command
+            // special case), so references inside overlay text are rewritten too.
+            const skillContent = generateOverlaidSkillContent(
+              template,
+              workflowId,
+              OPENSPEC_VERSION,
+              workflowOverlays,
               getTransformerForTool(
                 tool.value,
                 delivery,
@@ -345,7 +342,6 @@ export class UpdateCommand {
                 resolveCommandInvocation(tool.value)
               )
             );
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer);
             FileSystemUtils.assertPathWithin(skillsRoot, skillFile);
             await FileSystemUtils.writeFile(skillFile, skillContent);
           }
@@ -618,6 +614,29 @@ export class UpdateCommand {
   /**
    * Display the update plan showing which tools need updating.
    */
+  /**
+   * A global skill target (e.g. ~/.minimax/skills) is shared by every project,
+   * so its overlay fingerprint does not make it stale (projects with different
+   * plugins would re-render it for each other). When it was last rendered with
+   * other overlays than this project's, say so instead of staying silent.
+   */
+  private displayGlobalOverlayHints(
+    statuses: ToolVersionStatus[],
+    toolsToUpdate: ReadonlySet<string>
+  ): void {
+    for (const status of statuses) {
+      if (!status.globalOverlaysDiffer || toolsToUpdate.has(status.toolId)) continue;
+      const tool = AI_TOOLS.find((candidate) => candidate.value === status.toolId);
+      const where = tool?.globalSkillsDir ? ` (~/${tool.globalSkillsDir}/skills)` : '';
+      console.log(
+        chalk.yellow(
+          `Note: ${status.toolId}'s global skills${where} were rendered with different plugin overlays than this project's. ` +
+            'They are shared across projects, so they are not refreshed automatically; run `openspec update --force` to apply this project\'s overlays.'
+        )
+      );
+    }
+  }
+
   private displayUpdatePlan(
     toolsToUpdate: string[],
     statusByTool: Map<string, ToolVersionStatus>,
@@ -627,6 +646,9 @@ export class UpdateCommand {
       const status = statusByTool.get(toolId);
       if (status?.needsUpdate) {
         const fromVersion = status.generatedByVersion ?? 'unknown';
+        if (status.overlaysChanged && fromVersion === OPENSPEC_VERSION) {
+          return `${status.toolId} (plugin overlays changed)`;
+        }
         return `${status.toolId} (${fromVersion} → ${OPENSPEC_VERSION})`;
       }
       return `${toolId} (config sync)`;
@@ -920,7 +942,8 @@ export class UpdateCommand {
   private async handleLegacyCleanup(
     projectPath: string,
     desiredWorkflows: readonly (typeof ALL_WORKFLOWS)[number][],
-    delivery: Delivery
+    delivery: Delivery,
+    overlays: WorkflowOverlays
   ): Promise<LegacyUpgradeResult> {
     // Detect legacy artifacts
     const detection = await detectLegacyArtifacts(projectPath);
@@ -952,7 +975,8 @@ export class UpdateCommand {
         detection,
         canPrompt,
         desiredWorkflows,
-        delivery
+        delivery,
+        overlays
       );
       await this.performImmediateLegacyCleanup(
         projectPath,
@@ -989,7 +1013,8 @@ export class UpdateCommand {
         detection,
         canPrompt,
         desiredWorkflows,
-        delivery
+        delivery,
+        overlays
       );
       await this.performImmediateLegacyCleanup(
         projectPath,
@@ -1091,7 +1116,8 @@ export class UpdateCommand {
     detection: LegacyDetectionResult,
     canPrompt: boolean,
     desiredWorkflows: readonly (typeof ALL_WORKFLOWS)[number][],
-    delivery: Delivery
+    delivery: Delivery,
+    overlays: WorkflowOverlays
   ): Promise<LegacyUpgradeResult> {
     // Get tools that had legacy artifacts
     const legacyTools = getToolsFromLegacyArtifacts(detection);
@@ -1198,7 +1224,9 @@ export class UpdateCommand {
           workflowOverrides[tool.value] = inferredCodexWorkflows;
         }
         const skillTemplates = getSkillTemplates(toolWorkflows);
-        const commandContents = getCommandContents(toolWorkflows);
+        // Same overlay rendering as the main loop: without --force the main loop
+        // skips a tool this upgrade just made current, so these writes ship.
+        const commandContents = getOverlaidCommandContents(toolWorkflows, overlays);
 
         // Never overwrite a shared skills root owned by another tool. A tool
         // with its own command surface can still install those commands: this
@@ -1224,17 +1252,22 @@ export class UpdateCommand {
 
         // Create skill files when delivery includes skills
         if (shouldGenerateSkills && writesSkills) {
-          for (const { template, dirName } of skillTemplates) {
+          for (const { template, dirName, workflowId } of skillTemplates) {
             const skillDir = path.join(skillsDir, dirName);
             const skillFile = path.join(skillDir, 'SKILL.md');
 
-            const transformer = getTransformerForTool(
-              tool.value,
-              delivery,
-              resolveCommandSurfaceCapability(tool.value),
-              resolveCommandInvocation(tool.value)
+            const skillContent = generateOverlaidSkillContent(
+              template,
+              workflowId,
+              OPENSPEC_VERSION,
+              overlays,
+              getTransformerForTool(
+                tool.value,
+                delivery,
+                resolveCommandSurfaceCapability(tool.value),
+                resolveCommandInvocation(tool.value)
+              )
             );
-            const skillContent = generateSkillContent(template, OPENSPEC_VERSION, transformer);
             FileSystemUtils.assertPathWithin(skillsRoot, skillFile);
             await FileSystemUtils.writeFile(skillFile, skillContent);
           }

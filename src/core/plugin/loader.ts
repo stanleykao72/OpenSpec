@@ -297,47 +297,81 @@ export function loadPlugins(
 }
 
 /**
- * Resolves overlay file paths for a loaded plugin.
- * Returns a map of workflow ID → absolute file path.
+ * One overlay a plugin declares for a workflow.
  */
-export function resolveOverlayPaths(
-  plugin: LoadedPlugin
-): Map<string, string> {
-  const result = new Map<string, string>();
-  const overlays = plugin.manifest.skill_overlays;
-  if (!overlays) return result;
+export interface PluginOverlayEntry {
+  /** Declaring plugin, for error and conflict messages. */
+  pluginName: string;
+  /** Absolute path of the append file. */
+  path: string;
+  /** File content, or null when the file does not exist (a warning is printed). */
+  content: string | null;
+  /** Base-template sections the overlay replaces. */
+  supersedes: string[];
+}
 
-  for (const [workflowId, overlay] of Object.entries(overlays)) {
-    result.set(workflowId, path.join(plugin.dir, overlay.append));
-  }
-  return result;
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 /**
- * Collects overlay content for a specific workflow from all active plugins.
- * Returns overlay contents in plugin whitelist order.
- * Warns (but continues) if a declared overlay file doesn't exist.
+ * Resolves an overlay's append path, refusing one that leaves the plugin
+ * directory, lexically (`../`, absolute) or through a symlink.
  */
-export function getPluginOverlays(
-  plugins: LoadedPlugin[],
+function resolveOverlayFile(plugin: LoadedPlugin, workflowId: string, append: string): string {
+  const root = path.resolve(plugin.dir);
+  const target = path.resolve(root, append);
+  const escapes = () =>
+    new PluginLoadError(
+      `Plugin '${plugin.manifest.name}' overlay for '${workflowId}' (append: ${append}) resolves outside the plugin directory`,
+      plugin.manifest.name
+    );
+
+  if (!isWithin(root, target)) throw escapes();
+  if (fs.existsSync(target) && !isWithin(fs.realpathSync(root), fs.realpathSync(target))) {
+    throw escapes();
+  }
+  return target;
+}
+
+/**
+ * Collects the overlays every active plugin declares for a workflow, in plugin
+ * whitelist order. Only a plugin's own `skill_overlays` keys count, never
+ * inherited ones such as `constructor`.
+ *
+ * A missing append file yields `content: null` with a warning; the entry is
+ * kept so the caller can still validate and reject its `supersedes`.
+ *
+ * @throws PluginLoadError when an append path leaves its plugin directory
+ */
+export function getPluginOverlayEntries(
+  plugins: readonly LoadedPlugin[],
   workflowId: string
-): string[] {
-  const contents: string[] = [];
+): PluginOverlayEntry[] {
+  const entries: PluginOverlayEntry[] = [];
 
   for (const plugin of plugins) {
-    const paths = resolveOverlayPaths(plugin);
-    const overlayPath = paths.get(workflowId);
-    if (!overlayPath) continue;
+    const overlays = plugin.manifest.skill_overlays;
+    if (!overlays || !Object.hasOwn(overlays, workflowId)) continue;
+    const overlay = overlays[workflowId];
+    const overlayPath = resolveOverlayFile(plugin, workflowId, overlay.append);
 
+    let content: string | null = null;
     try {
-      const content = fs.readFileSync(overlayPath, 'utf-8');
-      contents.push(content);
+      content = fs.readFileSync(overlayPath, 'utf-8');
     } catch {
       console.warn(
         `[plugin:${plugin.manifest.name}] Overlay file not found: ${overlayPath}`
       );
     }
+    entries.push({
+      pluginName: plugin.manifest.name,
+      path: overlayPath,
+      content,
+      supersedes: [...(overlay.supersedes ?? [])],
+    });
   }
 
-  return contents;
+  return entries;
 }

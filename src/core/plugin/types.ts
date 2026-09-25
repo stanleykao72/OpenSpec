@@ -64,9 +64,13 @@ export const PluginHooksSchema = z.object({
   'archive.post': z.array(HookDefinitionSchema).optional(),
 });
 
-// A single skill overlay operation (currently only 'append' supported)
+// A single skill overlay operation. `append` is the only content operation;
+// `supersedes` names base-template sections (delimited by
+// `<!-- opsx:section NAME -->` … `<!-- /opsx:section NAME -->`) that the
+// appended overlay replaces, so they are dropped from the generated output.
 export const SkillOverlaySchema = z.object({
   append: z.string(),
+  supersedes: z.array(z.string().min(1)).optional(),
 }).strict();
 
 // Skill overlays mapped by workflow ID

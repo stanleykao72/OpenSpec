@@ -61,9 +61,11 @@ export const ProjectConfigSchema = z.object({
     .describe('Per-artifact rules, keyed by artifact ID'),
 
   // Optional: plugin whitelist (only listed plugins are loaded, order matters)
+  // null (a bare `plugins:` key) means no plugins, as in readProjectConfig.
   plugins: z
     .array(z.string().min(1))
-    .optional()
+    .nullish()
+    .transform((plugins) => plugins ?? undefined)
     .describe('Plugin names to load, in execution order'),
 
   // Optional: per-plugin configuration (namespaced by plugin name)
@@ -420,7 +422,9 @@ function parseProjectConfigContent(
     }
 
     // Parse plugins field (string array)
-    if (raw.plugins !== undefined) {
+    // A bare `plugins:` (every entry commented out) parses as null: no plugins,
+    // not an invalid field. readPluginWhitelist agrees.
+    if (raw.plugins !== undefined && raw.plugins !== null) {
       if (Array.isArray(raw.plugins)) {
         const validPlugins: string[] = [];
         for (let i = 0; i < raw.plugins.length; i++) {
@@ -668,6 +672,52 @@ export function readStorePointer(projectRoot: string): StorePointerRead {
 }
 
 /** Shared .yaml/.yml probe used by readProjectConfig and readStorePointer. */
+/**
+ * The `plugins:` whitelist as generation needs it: the valid names, plus a
+ * description of anything that kept the whitelist from being read exactly as
+ * written. readProjectConfig degrades each of these to a warning and "no
+ * plugins" (right for read-only commands); skill and command generation must
+ * not, because rendering without a whitelisted plugin's overlays overwrites
+ * its customised output with base text.
+ *
+ * Problems: the config exists but cannot be read, is not valid YAML, is not a
+ * mapping, has `plugins` that is not a list, or lists a non-string or empty
+ * entry. A missing config, or one without `plugins`, is not a problem.
+ */
+export function readPluginWhitelist(projectRoot: string): { plugins: string[]; problem: string | null } {
+  const configPath = resolveConfigFilePath(projectRoot);
+  if (configPath === null) return { plugins: [], problem: null };
+  const where = path.relative(projectRoot, configPath) || configPath;
+
+  let raw: unknown;
+  try {
+    raw = parseYaml(readFileSync(configPath, 'utf-8'));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    return { plugins: [], problem: `${where} could not be read or parsed as YAML (${reason}), so its plugins whitelist is unknown` };
+  }
+  if (raw === null || raw === undefined) return { plugins: [], problem: null };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { plugins: [], problem: `${where} is not a YAML mapping, so its plugins whitelist is unknown` };
+  }
+
+  const listed = (raw as Record<string, unknown>).plugins;
+  if (listed === undefined || listed === null) return { plugins: [], problem: null };
+  if (!Array.isArray(listed)) {
+    return { plugins: [], problem: `'plugins' in ${where} must be a list of plugin names` };
+  }
+  const plugins = listed.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+  const invalid = listed
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => typeof entry !== 'string' || entry.length === 0);
+  const problem = invalid.length > 0
+    ? `'plugins' in ${where} has invalid entr${invalid.length === 1 ? 'y' : 'ies'} at index ${invalid
+        .map(({ index }) => index)
+        .join(', ')} (each must be a non-empty plugin name)`
+    : null;
+  return { plugins, problem };
+}
+
 export function resolveConfigFilePath(projectRoot: string): string | null {
   const yamlPath = path.join(projectRoot, 'openspec', 'config.yaml');
   if (existsSync(yamlPath)) {

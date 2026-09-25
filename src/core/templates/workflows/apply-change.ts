@@ -97,6 +97,7 @@ ${STORE_SELECTION_GUIDANCE}
 
 6. **Implement tasks** — plugin overlay takes precedence
 
+<!-- opsx:section apply-inline-loop -->
    If a plugin overlay appended after these base steps defines orchestration (e.g. a workflow
    fan-out), **follow that overlay instead of this inline loop**. Check the end of this document
    for such a section first.
@@ -122,7 +123,9 @@ ${STORE_SELECTION_GUIDANCE}
    - Overall progress: "N/M tasks complete"
    - If all done: suggest archive
    - If paused: explain why and wait for guidance
+<!-- /opsx:section apply-inline-loop -->
 
+<!-- opsx:section apply-output-templates -->
 **Output During Implementation**
 
 \`\`\`
@@ -173,6 +176,7 @@ All tasks complete! You can archive this change with \`/opsx:archive\`.
 
 What would you like to do?
 \`\`\`
+<!-- /opsx:section apply-output-templates -->
 
 **Guardrails**
 - Keep going through tasks until done or blocked

@@ -202,6 +202,36 @@ describe('plugin/types', () => {
       const result = SkillOverlaySchema.safeParse({ append: 'a.md', prepend: 'b.md' });
       expect(result.success).toBe(false);
     });
+
+    it('should accept supersedes as a list of base section names', () => {
+      const result = SkillOverlaySchema.safeParse({
+        append: 'overlays/apply.md',
+        supersedes: ['apply-inline-loop', 'apply-output-templates'],
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.supersedes).toEqual(['apply-inline-loop', 'apply-output-templates']);
+      }
+    });
+
+    it('should still reject prepend when supersedes is present (strict mode)', () => {
+      const result = SkillOverlaySchema.safeParse({
+        append: 'a.md',
+        supersedes: ['apply-inline-loop'],
+        prepend: 'b.md',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject supersedes without append', () => {
+      const result = SkillOverlaySchema.safeParse({ supersedes: ['apply-inline-loop'] });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject a non-array or empty-name supersedes', () => {
+      expect(SkillOverlaySchema.safeParse({ append: 'a.md', supersedes: 'apply-inline-loop' }).success).toBe(false);
+      expect(SkillOverlaySchema.safeParse({ append: 'a.md', supersedes: [''] }).success).toBe(false);
+    });
   });
 
   describe('SkillOverlaysSchema', () => {

@@ -51,6 +51,7 @@ ${STORE_SELECTION_GUIDANCE}
 
 4. **Verification execution — plugin overlay takes precedence**
 
+<!-- opsx:section verify-default-procedure -->
    If a plugin overlay appended after these base steps defines how to execute verification
    (e.g. a workflow fan-out), **follow that overlay and skip the default procedure in steps 5+**.
    Check the end of this document for such a section before running the default.
@@ -136,6 +137,7 @@ ${STORE_SELECTION_GUIDANCE}
    | Correctness  | M/N reqs covered |
    | Coherence    | Followed/Issues  |
    \`\`\`
+<!-- /opsx:section verify-default-procedure -->
 
    **Issues by Priority**:
 
@@ -159,6 +161,7 @@ ${STORE_SELECTION_GUIDANCE}
    - If only warnings: "No critical issues. Y warning(s) to consider. Ready for archive (with noted improvements)."
    - If all clear: "All checks passed. Ready for archive."
 
+<!-- opsx:section verify-output-format -->
 **Verification Heuristics**
 
 - **Completeness**: Focus on objective checklist items (checkboxes, requirements list)
@@ -181,7 +184,8 @@ Use clear markdown with:
 - Grouped lists for issues (CRITICAL/WARNING/SUGGESTION)
 - Code references in format: \`file.ts:123\`
 - Specific, actionable recommendations
-- No vague suggestions like "consider reviewing"`,
+- No vague suggestions like "consider reviewing"
+<!-- /opsx:section verify-output-format -->`,
     license: 'MIT',
     compatibility: 'Requires openspec CLI.',
     metadata: { author: 'openspec', version: '1.0' },
@@ -234,6 +238,7 @@ ${STORE_SELECTION_GUIDANCE}
 
 4. **Verification execution — plugin overlay takes precedence**
 
+<!-- opsx:section verify-default-procedure -->
    If a plugin overlay appended after these base steps defines how to execute verification
    (e.g. a workflow fan-out), **follow that overlay and skip the default procedure in steps 5+**.
    Check the end of this document for such a section before running the default.
@@ -319,6 +324,7 @@ ${STORE_SELECTION_GUIDANCE}
    | Correctness  | M/N reqs covered |
    | Coherence    | Followed/Issues  |
    \`\`\`
+<!-- /opsx:section verify-default-procedure -->
 
    **Issues by Priority**:
 
@@ -342,6 +348,7 @@ ${STORE_SELECTION_GUIDANCE}
    - If only warnings: "No critical issues. Y warning(s) to consider. Ready for archive (with noted improvements)."
    - If all clear: "All checks passed. Ready for archive."
 
+<!-- opsx:section verify-output-format -->
 **Verification Heuristics**
 
 - **Completeness**: Focus on objective checklist items (checkboxes, requirements list)
@@ -364,6 +371,7 @@ Use clear markdown with:
 - Grouped lists for issues (CRITICAL/WARNING/SUGGESTION)
 - Code references in format: \`file.ts:123\`
 - Specific, actionable recommendations
-- No vague suggestions like "consider reviewing"`
+- No vague suggestions like "consider reviewing"
+<!-- /opsx:section verify-output-format -->`
   };
 }
