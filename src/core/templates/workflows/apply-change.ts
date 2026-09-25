@@ -101,6 +101,7 @@ ${STORE_SELECTION_GUIDANCE}
    fan-out), **follow that overlay instead of this inline loop**. Check the end of this document
    for such a section first.
 
+<!-- opsx:section apply-inline-loop -->
    If no such overlay is present, loop until done or blocked — for each pending task:
    - Show which task is being worked on
    - Make the code changes required
@@ -122,7 +123,9 @@ ${STORE_SELECTION_GUIDANCE}
    - Overall progress: "N/M tasks complete"
    - If all done: suggest archive
    - If paused: explain why and wait for guidance
+<!-- /opsx:section apply-inline-loop -->
 
+<!-- opsx:section apply-output-templates -->
 **Output During Implementation**
 
 \`\`\`
@@ -173,6 +176,7 @@ All tasks complete! You can archive this change with \`/opsx:archive\`.
 
 What would you like to do?
 \`\`\`
+<!-- /opsx:section apply-output-templates -->
 
 **Guardrails**
 - Keep going through tasks until done or blocked
