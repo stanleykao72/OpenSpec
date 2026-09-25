@@ -10,6 +10,9 @@ import { FileSystemUtils } from '../../src/utils/file-system.js';
 import { loadProjectOverlays } from '../../src/core/shared/overlay-generation.js';
 import { areCommandFilesUpToDate, getToolVersionStatus } from '../../src/core/shared/tool-detection.js';
 import type { GlobalConfig } from '../../src/core/global-config.js';
+import { createRequire } from 'node:module';
+
+const { version: OPENSPEC_VERSION } = createRequire(import.meta.url)('../../package.json') as { version: string };
 
 const mockState: { config: GlobalConfig } = {
   config: { featureFlags: {}, profile: 'core', delivery: 'both' },
@@ -382,5 +385,66 @@ describe('overlay supersedes across generation entry points', () => {
     await expect(
       fs.stat(path.join(testDir, '.claude', 'skills', 'openspec-apply-change', 'SKILL.md'))
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Skill-bearing tools were judged by generatedBy alone, so a changed overlay
+  // (content or supersedes) left update without --force reporting "up to date".
+  describe('skill-bearing up-to-date detection follows overlay changes', () => {
+    const overlayFile = () => path.join(testDir, 'openspec', 'plugins', 'fixture-lifecycle', 'overlays', 'apply.md');
+    const status = () => getToolVersionStatus(testDir, 'claude', OPENSPEC_VERSION);
+
+    it('is current right after update', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+
+      expect(status().needsUpdate).toBe(false);
+    });
+
+    it('goes stale when overlay content changes, and update without --force re-renders', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      await fs.writeFile(overlayFile(), '## Apply Via Revised Fan-out\n');
+      clearPluginCache();
+
+      expect(status().needsUpdate).toBe(true);
+
+      await new UpdateCommand().execute(testDir);
+      expect(await read('.claude', 'skills', 'openspec-apply-change', 'SKILL.md')).toContain('Revised Fan-out');
+      expect(status().needsUpdate).toBe(false);
+    });
+
+    it('goes stale when supersedes changes', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      await writeFixturePlugin({ apply: { append: 'overlays/apply.md', supersedes: ['apply-inline-loop'] } });
+      clearPluginCache();
+
+      expect(status().needsUpdate).toBe(true);
+    });
+
+    it('goes stale when the plugin is removed from the whitelist', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      await fs.writeFile(path.join(testDir, 'openspec', 'config.yaml'), 'schema: spec-driven\n');
+      clearPluginCache();
+
+      expect(status().needsUpdate).toBe(true);
+    });
+
+    it('reports stale instead of throwing when the overlays cannot be resolved', async () => {
+      await writeFixturePlugin(SUPERSEDING_APPLY);
+      await new UpdateCommand().execute(testDir);
+      await writeFixturePlugin({ apply: { append: 'overlays/apply.md', supersedes: ['no-such-section'] } });
+      clearPluginCache();
+
+      expect(status().needsUpdate).toBe(true);
+    });
+
+    it('stamps no overlay fingerprint in a plugin-less project', async () => {
+      await new UpdateCommand().execute(testDir);
+
+      expect(await read('.claude', 'skills', 'openspec-apply-change', 'SKILL.md')).not.toContain('overlays:');
+      expect(status().needsUpdate).toBe(false);
+    });
   });
 });

@@ -8,7 +8,11 @@ import path from 'path';
 import * as fs from 'fs';
 import { AI_TOOLS, OPENSPEC_SKILL_NAMES } from '../config.js';
 import { CommandAdapterRegistry, generateCommands } from '../command-generation/index.js';
-import { loadProjectOverlays, getOverlaidCommandContents } from './overlay-generation.js';
+import {
+  loadProjectOverlays,
+  getOverlaidCommandContents,
+  type WorkflowOverlays,
+} from './overlay-generation.js';
 import { getGlobalConfig } from '../global-config.js';
 import { getProfileWorkflows, ALL_WORKFLOWS } from '../profiles.js';
 import {
@@ -83,8 +87,40 @@ export interface ToolVersionStatus {
    * what would be generated now. Null when neither says the files are current.
    */
   generatedByVersion: string | null;
-  /** Whether the tool needs updating (version mismatch or missing) */
+  /**
+   * Whether the tool's skills were rendered with different plugin overlays
+   * than the project now has (overlay content or supersedes changed, a plugin
+   * added or removed, or overlays that no longer resolve).
+   */
+  overlaysChanged: boolean;
+  /** Whether the tool needs updating (version mismatch, missing, or overlays changed) */
   needsUpdate: boolean;
+}
+
+/**
+ * Options shared by the up-to-date checks.
+ */
+export interface ToolStatusOptions {
+  workflows?: readonly string[];
+  /**
+   * The project's resolved overlays, when the caller already has them (update
+   * passes the ones it will render with). Resolved once per call otherwise.
+   */
+  overlays?: WorkflowOverlays;
+}
+
+/**
+ * The project's overlays for an up-to-date check, or null when they cannot be
+ * resolved (unloadable plugin, invalid overlay): then nothing is current and
+ * `update` reports the error.
+ */
+function overlaysForDetection(projectRoot: string, options?: ToolStatusOptions): WorkflowOverlays | null {
+  if (options?.overlays) return options.overlays;
+  try {
+    return loadProjectOverlays(projectRoot);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -165,9 +201,7 @@ function normalizeCommandContent(content: string): string {
 export function areCommandFilesUpToDate(
   projectRoot: string,
   toolId: string,
-  options?: {
-    workflows?: readonly string[];
-  }
+  options?: ToolStatusOptions
 ): boolean {
   const adapter = CommandAdapterRegistry.get(toolId);
   if (!adapter) return false;
@@ -191,14 +225,11 @@ export function areCommandFilesUpToDate(
 
   // Compare against exactly what `update` writes, plugin overlays included;
   // otherwise every overlay-bearing project reads as stale on each run. An
-  // overlay that cannot be rendered (invalid `supersedes`) means the files are
-  // not current: report stale and let `update` surface the error.
-  let commandContents;
-  try {
-    commandContents = getOverlaidCommandContents(knownWorkflows, loadProjectOverlays(projectRoot));
-  } catch {
-    return false;
-  }
+  // overlay that cannot be resolved means the files are not current: report
+  // stale and let `update` surface the error.
+  const overlays = overlaysForDetection(projectRoot, options);
+  if (!overlays) return false;
+  const commandContents = getOverlaidCommandContents(knownWorkflows, overlays);
   const generatedCommands = generateCommands(commandContents, adapter);
 
   if (generatedCommands.length === 0) {
@@ -273,6 +304,20 @@ export function getToolStates(projectRoot: string): Map<string, ToolSkillStatus>
  * Extracts the generatedBy version from a skill file's YAML frontmatter.
  * Returns null if the field is not found or the file doesn't exist.
  */
+/**
+ * Reads the plugin-overlay fingerprint (`metadata.overlays`) from a skill
+ * file's frontmatter; '' when absent (rendered without overlays).
+ */
+export function extractOverlayFingerprint(skillFilePath: string): string {
+  try {
+    const content = fs.readFileSync(skillFilePath, 'utf-8');
+    const frontmatter = /^---\n([\s\S]*?)\n---/.exec(content.replace(/\r\n/g, '\n'))?.[1] ?? '';
+    return /^\s*overlays:\s*["']?([0-9a-f]+)["']?\s*$/m.exec(frontmatter)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
 export function extractGeneratedByVersion(skillFilePath: string): string | null {
   try {
     if (!fs.existsSync(skillFilePath)) {
@@ -310,9 +355,7 @@ export function getToolVersionStatus(
   projectRoot: string,
   toolId: string,
   currentVersion: string,
-  options?: {
-    workflows?: readonly string[];
-  }
+  options?: ToolStatusOptions
 ): ToolVersionStatus {
   const tool = AI_TOOLS.find((t) => t.value === toolId);
   if (!tool || !toolSupportsSkills(tool)) {
@@ -321,6 +364,7 @@ export function getToolVersionStatus(
       toolName: toolId,
       configured: false,
       generatedByVersion: null,
+      overlaysChanged: false,
       needsUpdate: false,
     };
   }
@@ -332,7 +376,7 @@ export function getToolVersionStatus(
     ),
   ];
   let generatedByVersion: string | null = null;
-  let foundSkill = false;
+  let foundSkillFile: string | null = null;
 
   // 1. Find the first skill file that exists and read its version
   for (const skillName of SKILL_NAMES) {
@@ -340,11 +384,11 @@ export function getToolVersionStatus(
       const skillFile = path.join(skillsDir, skillName, 'SKILL.md');
       if (fs.existsSync(skillFile)) {
         generatedByVersion = extractGeneratedByVersion(skillFile);
-        foundSkill = true;
+        foundSkillFile = skillFile;
         break;
       }
     }
-    if (foundSkill) break;
+    if (foundSkillFile) break;
   }
 
   const skillConfigured = getToolSkillStatus(projectRoot, toolId).configured;
@@ -354,11 +398,30 @@ export function getToolVersionStatus(
     readSharedSkillTarget(projectRoot, tool.skillsDir!) === toolId;
   const configured = skillConfigured || commandConfigured || markerConfigured;
 
+  // Resolved at most once per call, and only when something is checked
+  // against it; update passes the overlays it renders with.
+  let overlays: WorkflowOverlays | null | undefined;
+  const projectOverlays = () => {
+    if (overlays === undefined) overlays = overlaysForDetection(projectRoot, options);
+    return overlays;
+  };
+
   // 2. Commands-only installs have no skill file to read a version from, so fall
   //    back to comparing the generated command content. Deliberately skipped when
   //    skill files exist: an unreadable version there must still force a rewrite.
-  if (!skillConfigured && commandConfigured && areCommandFilesUpToDate(projectRoot, toolId, options)) {
-    generatedByVersion = currentVersion;
+  if (!skillConfigured && commandConfigured) {
+    const current = projectOverlays();
+    if (current && areCommandFilesUpToDate(projectRoot, toolId, { ...options, overlays: current })) {
+      generatedByVersion = currentVersion;
+    }
+  }
+
+  // 3. A skill records the overlay fingerprint it was rendered with; the
+  //    version alone cannot tell that a plugin's overlay changed since.
+  let overlaysChanged = false;
+  if (skillConfigured && foundSkillFile) {
+    const current = projectOverlays();
+    overlaysChanged = current === null || extractOverlayFingerprint(foundSkillFile) !== current.fingerprint;
   }
   if (!skillConfigured && !commandConfigured && markerConfigured) {
     const delivery = getGlobalConfig().delivery ?? 'both';
@@ -370,13 +433,16 @@ export function getToolVersionStatus(
     }
   }
 
-  const needsUpdate = configured && (generatedByVersion === null || generatedByVersion !== currentVersion);
+  const needsUpdate = configured && (
+    generatedByVersion === null || generatedByVersion !== currentVersion || overlaysChanged
+  );
 
   return {
     toolId,
     toolName: tool.name,
     configured,
     generatedByVersion,
+    overlaysChanged,
     needsUpdate,
   };
 }

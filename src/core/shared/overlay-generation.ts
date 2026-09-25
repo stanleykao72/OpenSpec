@@ -185,8 +185,22 @@ export function resolveWorkflowOverlays(plugins: readonly LoadedPlugin[]): Workf
  * overlay, throws, so generation stops before writing.
  */
 export function loadProjectOverlays(projectRoot: string): WorkflowOverlays {
-  return resolveWorkflowOverlays(getLoadedPlugins(projectRoot, { strict: true }));
+  const plugins = getLoadedPlugins(projectRoot, { strict: true });
+  let overlays = resolvedByPluginList.get(plugins);
+  if (!overlays) {
+    overlays = resolveWorkflowOverlays(plugins);
+    resolvedByPluginList.set(plugins, overlays);
+  }
+  return overlays;
 }
+
+/**
+ * Resolved overlays per plugin list. getLoadedPlugins returns the same array
+ * while its cache holds and a new one after clearPluginCache, so this lives
+ * exactly as long as the plugin cache: up-to-date checks run per tool without
+ * re-reading and re-validating every overlay.
+ */
+const resolvedByPluginList = new WeakMap<readonly LoadedPlugin[], WorkflowOverlays>();
 
 /**
  * Command contents for the given workflows with overlays applied.

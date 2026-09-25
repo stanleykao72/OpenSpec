@@ -225,6 +225,7 @@ export class UpdateCommand {
     const toolStatuses = configuredTools.map((toolId) =>
       getToolVersionStatus(resolvedProjectPath, toolId, OPENSPEC_VERSION, {
         workflows: legacyWorkflowOverrides[toolId] ?? desiredWorkflows,
+        overlays: workflowOverlays,
       })
     );
     const statusByTool = new Map(toolStatuses.map((status) => [status.toolId, status] as const));
@@ -618,6 +619,9 @@ export class UpdateCommand {
       const status = statusByTool.get(toolId);
       if (status?.needsUpdate) {
         const fromVersion = status.generatedByVersion ?? 'unknown';
+        if (status.overlaysChanged && fromVersion === OPENSPEC_VERSION) {
+          return `${status.toolId} (plugin overlays changed)`;
+        }
         return `${status.toolId} (${fromVersion} → ${OPENSPEC_VERSION})`;
       }
       return `${toolId} (config sync)`;
