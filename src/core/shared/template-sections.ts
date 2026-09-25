@@ -19,7 +19,8 @@
 
 const MARKER_RE = /^\s*<!-- (\/?)opsx:section ([a-z0-9][a-z0-9-]*) -->\s*$/;
 const MARKER_HINT = 'opsx:section';
-const FENCE_OPEN_RE = /^\s*(`{3,}|~{3,})/;
+const FENCE_OPEN_RE = /^( *)(`{3,}|~{3,})(.*)$/;
+const LIST_ITEM_RE = /^( *)([-*+]|\d{1,9}[.)])( +)\S/;
 const FENCE_CLOSE_RE = /^\s*(`{3,}|~{3,})\s*$/;
 
 interface ParsedMarker {
@@ -46,6 +47,37 @@ interface Section {
 }
 
 /**
+ * Whether a line that starts with a backtick/tilde run opens a fenced code
+ * block, per CommonMark:
+ * - a backtick fence's info string cannot contain a backtick ("```x``` is
+ *   inline" is inline code, not a fence);
+ * - the run must be indented at most 3 spaces relative to its container. At
+ *   the top level that is the line itself; for a fence inside a list item it
+ *   is the item's content column, found from the nearest preceding
+ *   less-indented non-blank line (a list item's text column, or a nested
+ *   paragraph's own indent). Anything deeper is an indented code block.
+ */
+function isFenceOpener(lines: string[], index: number, open: RegExpExecArray): boolean {
+  const [, indentText, run, info] = open;
+  if (run[0] === '`' && info.includes('`')) return false;
+  const indent = indentText.length;
+  if (indent <= 3) return true;
+
+  for (let i = index - 1; i >= 0; i--) {
+    const previous = lines[i];
+    if (previous.trim() === '') continue;
+    const previousIndent = previous.length - previous.trimStart().length;
+    if (previousIndent >= indent) continue;
+    // A list item's content starts after its marker; any other line sits at
+    // its container's content column (0 at the top level).
+    const item = LIST_ITEM_RE.exec(previous);
+    const contentColumn = item ? item[1].length + item[2].length + item[3].length : previousIndent;
+    return indent >= contentColumn && indent - contentColumn <= 3;
+  }
+  return false;
+}
+
+/**
  * Marker lines of a body, skipping fenced code blocks (CommonMark rules): a
  * fence opens on a run of 3+ backticks or tildes (an info string may follow)
  * and closes only on a line holding nothing but a run of the same character
@@ -65,8 +97,8 @@ function scanMarkers(lines: string[]): Array<{ index: number; marker: ParsedMark
       return;
     }
     const open = FENCE_OPEN_RE.exec(line);
-    if (open) {
-      fence = { run: open[1], line: index + 1 };
+    if (open && isFenceOpener(lines, index, open)) {
+      fence = { run: open[2], line: index + 1 };
       return;
     }
     const marker = parseMarker(line, index + 1);

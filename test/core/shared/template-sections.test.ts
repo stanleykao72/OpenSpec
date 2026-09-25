@@ -200,6 +200,37 @@ describe('stripSections', () => {
     expect(() => hasSectionMarkers(['```', 'x'].join('\n'))).toThrowError(/fence.*not closed/i);
   });
 
+  it('does not open a fence on a backtick run whose info string has a backtick (inline code)', () => {
+    expect(hasSectionMarkers('```x``` is inline\n<!-- opsx:section foo -->\n```bash\necho\n```')).toBe(true);
+    expect(listSections(['```x``` is inline', open('a'), 'x', close('a')].join('\n'))).toEqual(['a']);
+    // A tilde fence's info string may contain backticks.
+    expect(listSections(['~~~ `x`', open('hidden'), '~~~', open('a'), close('a')].join('\n'))).toEqual(['a']);
+  });
+
+  it('does not open a fence on a run indented four or more spaces outside a list', () => {
+    expect(hasSectionMarkers('    ```\n<!-- opsx:section foo -->\n    ```')).toBe(true);
+    expect(listSections(['text', '', '    ```', open('a'), close('a'), '    ```'].join('\n'))).toEqual(['a']);
+  });
+
+  it('opens a fence indented four or more spaces when it belongs to a list item', () => {
+    const body = [
+      '1. **Step**',
+      '   - Run:',
+      '     ```bash',
+      `     ${open('hidden')}`,
+      '     ```',
+      '     - Nested:',
+      '       ```',
+      `       ${open('hidden-too')}`,
+      '       ```',
+      open('real'),
+      'x',
+      close('real'),
+    ].join('\n');
+
+    expect(listSections(body)).toEqual(['real']);
+  });
+
   it('does not close a backtick fence on a tilde line', () => {
     const body = ['```', '~~~', open('inside'), '```', open('outside'), 'x', close('outside')].join('\n');
 
