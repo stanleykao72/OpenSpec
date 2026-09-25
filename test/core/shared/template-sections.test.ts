@@ -142,7 +142,48 @@ describe('stripSections', () => {
       stripSections([open('a'), close('a'), open('a'), close('a')].join('\n'))
     ).toThrowError(/more than once/);
     expect(() => stripSections(['<!-- opsx:section -->'].join('\n'))).toThrowError(/Malformed/);
-    expect(() => stripSections(['text <!-- opsx:section a --> text'].join('\n'))).toThrowError(/Malformed/);
+    expect(() => stripSections(['<!--opsx:section a-->'].join('\n'))).toThrowError(/Malformed/);
+    expect(() => stripSections(['   <!-- opsx:section a -> '].join('\n'))).toThrowError(/Malformed/);
+  });
+
+  it('treats a mention in prose or inline code as plain text, not a marker', () => {
+    const body = [
+      'Wrap a block in `<!-- opsx:section NAME -->` to make it replaceable.',
+      'text <!-- opsx:section a --> text',
+    ].join('\n');
+
+    expect(listSections(body)).toEqual([]);
+    expect(stripSections(body)).toBe(body);
+  });
+
+  it('ignores marker-shaped lines inside fenced code blocks', () => {
+    const body = [
+      'Example:',
+      '',
+      '   ```markdown',
+      `   ${open('example')}`,
+      '   body',
+      '   ```',
+      '',
+      '~~~',
+      close('unbalanced-in-fence'),
+      '<!-- opsx:section -->',
+      '~~~',
+      open('real'),
+      'kept',
+      close('real'),
+    ].join('\n');
+
+    expect(listSections(body)).toEqual(['real']);
+    expect(stripSections(body)).toBe(body.split('\n').filter((line) => !line.includes('section real')).join('\n'));
+    expect(stripSections(body, ['real'])).toBe(body.split('\n').slice(0, 11).join('\n'));
+    expect(() => stripSections(body, ['example'])).toThrowError(/example/);
+  });
+
+  it('does not close a backtick fence on a tilde line', () => {
+    const body = ['```', '~~~', open('inside'), '```', open('outside'), 'x', close('outside')].join('\n');
+
+    expect(listSections(body)).toEqual(['outside']);
   });
 });
 

@@ -7,7 +7,11 @@
  *   ...block...
  *   <!-- /opsx:section NAME -->
  *
- * Markers sit on their own lines (indentation allowed). Rendering always goes
+ * Markers sit on their own lines (indentation allowed) outside fenced code
+ * blocks. A mention anywhere else (prose, inline code, a fenced example) is
+ * plain text. A line that starts with `<!--` and mentions `opsx:section` but
+ * does not have the exact marker shape is rejected, so a typo cannot silently
+ * leak into generated output. Rendering always goes
  * through `stripSections`: superseded sections are dropped whole, every other
  * marker line is removed, so output with nothing superseded is byte-identical
  * to the template as it read before the markers were added.
@@ -15,6 +19,7 @@
 
 const MARKER_RE = /^\s*<!-- (\/?)opsx:section ([a-z0-9][a-z0-9-]*) -->\s*$/;
 const MARKER_HINT = 'opsx:section';
+const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 
 interface ParsedMarker {
   closing: boolean;
@@ -22,7 +27,7 @@ interface ParsedMarker {
 }
 
 function parseMarker(line: string, lineNumber: number): ParsedMarker | null {
-  if (!line.includes(MARKER_HINT)) return null;
+  if (!line.includes(MARKER_HINT) || !line.trimStart().startsWith('<!--')) return null;
   const match = MARKER_RE.exec(line);
   if (!match) {
     throw new Error(
@@ -39,15 +44,47 @@ interface Section {
   end: number; // index of the closing marker line
 }
 
+/**
+ * Marker lines of a body, skipping fenced code blocks. A fence closes only on
+ * a line opening with the same character, at least as long as the opener.
+ */
+function scanMarkers(lines: string[]): Array<{ index: number; marker: ParsedMarker }> {
+  const found: Array<{ index: number; marker: ParsedMarker }> = [];
+  let fence: string | null = null;
+
+  lines.forEach((line, index) => {
+    const fenceMatch = FENCE_RE.exec(line);
+    if (fenceMatch) {
+      const run = fenceMatch[1];
+      if (fence === null) {
+        fence = run;
+      } else if (run[0] === fence[0] && run.length >= fence.length) {
+        fence = null;
+      }
+      return;
+    }
+    if (fence !== null) return;
+    const marker = parseMarker(line, index + 1);
+    if (marker) found.push({ index, marker });
+  });
+
+  return found;
+}
+
+/**
+ * Whether a body contains any section marker line (outside fenced code).
+ */
+export function hasSectionMarkers(body: string): boolean {
+  return scanMarkers(body.split('\n')).length > 0;
+}
+
 function parseSections(lines: string[]): { sections: Section[]; markerLines: Set<number> } {
   const sections: Section[] = [];
   const markerLines = new Set<number>();
   const seen = new Set<string>();
   let current: { name: string; start: number } | null = null;
 
-  lines.forEach((line, index) => {
-    const marker = parseMarker(line, index + 1);
-    if (!marker) return;
+  for (const { index, marker } of scanMarkers(lines)) {
     markerLines.add(index);
 
     if (!marker.closing) {
@@ -60,7 +97,7 @@ function parseSections(lines: string[]): { sections: Section[]; markerLines: Set
         throw new Error(`Section "${marker.name}" is defined more than once (line ${index + 1}).`);
       }
       current = { name: marker.name, start: index };
-      return;
+      continue;
     }
 
     if (!current || current.name !== marker.name) {
@@ -71,7 +108,7 @@ function parseSections(lines: string[]): { sections: Section[]; markerLines: Set
     sections.push({ name: current.name, start: current.start, end: index });
     seen.add(current.name);
     current = null;
-  });
+  }
 
   if (current) {
     const open = current as { name: string; start: number };
