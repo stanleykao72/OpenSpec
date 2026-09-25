@@ -21,11 +21,17 @@
  *   - shell: ZSH, ZSH_CUSTOM, ZDOTDIR, PROFILE
  *   - tool/global state: CODEX_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME,
  *     XDG_CACHE_HOME, XDG_STATE_HOME
- *   - git: GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_GLOBAL,
- *     GIT_CONFIG_SYSTEM
- *   - OpenSpec behavior switches: OPENSPEC_NO_UPDATE_CHECK,
+ *   - git: every GIT_* variable (repo redirects such as GIT_DIR /
+ *     GIT_COMMON_DIR / GIT_OBJECT_DIRECTORY and config injection such as
+ *     GIT_CONFIG_PARAMETERS / GIT_CONFIG_COUNT). Tests that need git config
+ *     pass it explicitly per spawn after this file runs.
+ *   - OpenSpec switches that src reads from process.env: OPENSPEC_NO_UPDATE_CHECK,
  *     OPENSPEC_NO_AUTO_CONFIG, OPENSPEC_NO_COMPLETIONS, OPENSPEC_CONCURRENCY,
- *     OPENSPEC_NO_ANIMATION, OPENSPEC_ENABLE_CLI_AGENT_OPENERS
+ *     OPENSPEC_NO_ANIMATION, OPENSPEC_ENABLE_CLI_AGENT_OPENERS,
+ *     OPEN_SPEC_INTERACTIVE
+ *   Not neutralized (stubbed per test where it matters): SHELL, PSModulePath,
+ *   EDITOR / VISUAL, TERM_PROGRAM / WT_SESSION, npm_config_* (npm sets these
+ *   for `npm test` itself).
  *   (OPENSPEC_TELEMETRY / DO_NOT_TRACK are pinned by vitest.config.ts `env`.)
  *
  * Setup files run in the worker before the test file is imported, so chalk and
@@ -57,21 +63,20 @@ const DELETED_VARS = [
   'XDG_DATA_HOME',
   'XDG_CACHE_HOME',
   'XDG_STATE_HOME',
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_CONFIG_GLOBAL',
-  'GIT_CONFIG_SYSTEM',
   'OPENSPEC_NO_UPDATE_CHECK',
   'OPENSPEC_NO_AUTO_CONFIG',
   'OPENSPEC_NO_COMPLETIONS',
   'OPENSPEC_CONCURRENCY',
   'OPENSPEC_NO_ANIMATION',
   'OPENSPEC_ENABLE_CLI_AGENT_OPENERS',
+  'OPEN_SPEC_INTERACTIVE',
 ];
 
 for (const name of DELETED_VARS) {
   delete process.env[name];
+}
+for (const name of Object.keys(process.env)) {
+  if (name.startsWith('GIT_')) delete process.env[name];
 }
 
 process.env.HOME = isolatedHome;
