@@ -117,6 +117,8 @@ describe('overlay supersedes across generation entry points', () => {
       // Kept: setup steps, the precedence pointer, guardrails, and the overlay itself.
       expect(out, label).toContain('5. **Show current progress**');
       expect(out, label).toContain('6. **Implement tasks** — plugin overlay takes precedence');
+      // The pointer at the superseded loop goes with it; nothing refers to it.
+      expect(out, label).not.toContain('instead of this inline loop');
       expect(out, label).toContain('**Guardrails**');
       expect(out, label).toContain('## Apply Via Fixture Fan-out');
       expect(out.indexOf('**Guardrails**'), label).toBeLessThan(out.indexOf('## Apply Via Fixture Fan-out'));
@@ -148,6 +150,15 @@ describe('overlay supersedes across generation entry points', () => {
       expect(out, label).not.toContain('**Verify Completeness**');
       expect(out, label).not.toContain('**Generate Verification Report**');
       expect(out, label).toContain('4. **Verification execution — plugin overlay takes precedence**');
+      // Sentences that point at the superseded default procedure go with it.
+      expect(out, label).not.toContain('skip the default procedure in steps 5+');
+      expect(out, label).not.toContain('continue with the default three-dimension verification');
+      // The archive-readiness guardrails are not supersedable.
+      expect(out, label).toContain('1. **CRITICAL** (Must fix before archive):');
+      expect(out, label).toContain('"X critical issue(s) found. Fix before archiving."');
+      expect(out.indexOf('Fix before archiving'), label).toBeLessThan(
+        out.indexOf('## Verify Via Fixture Fan-out')
+      );
       expect(out, label).not.toContain('opsx:section');
       expect(out, label).not.toMatch(/\n\n\n/);
     }
