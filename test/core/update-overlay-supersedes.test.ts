@@ -225,23 +225,42 @@ describe('overlay supersedes across generation entry points', () => {
   it('the legacy-upgrade path applies overlays and supersedes to the tools it sets up', async () => {
     await writeFixturePlugin(SUPERSEDING_APPLY);
     // A legacy slash-command install and no skills: update --force upgrades it.
-    // The main loop then force-rewrites every configured tool, which would hide a
-    // missing overlay pass in the upgrade path, so check every write, not just
-    // the final file.
+    // The forced main loop then rewrites every configured tool, which would
+    // hide a missing overlay pass in the upgrade path, so attribute writes to
+    // the upgrade itself: record exactly the writes made while it runs.
     await fs.rm(path.join(testDir, '.claude', 'skills'), { recursive: true, force: true });
     const legacyDir = path.join(testDir, '.claude', 'commands', 'openspec');
     await fs.mkdir(legacyDir, { recursive: true });
     await fs.writeFile(path.join(legacyDir, 'proposal.md'), 'old command content');
     const writeSpy = vi.spyOn(FileSystemUtils, 'writeFile');
+    type Upgrade = (...args: unknown[]) => Promise<unknown>;
+    const proto = UpdateCommand.prototype as unknown as { upgradeLegacyTools: Upgrade };
+    const originalUpgrade = proto.upgradeLegacyTools;
+    let upgradeWrites: unknown[][] | null = null;
+    const upgradeSpy = vi.spyOn(proto, 'upgradeLegacyTools').mockImplementation(async function (
+      this: unknown,
+      ...args: unknown[]
+    ) {
+      const before = writeSpy.mock.calls.length;
+      const result = await originalUpgrade.apply(this, args);
+      upgradeWrites = writeSpy.mock.calls.slice(before);
+      return result;
+    });
 
     await new UpdateCommand({ force: true }).execute(testDir);
 
-    const applyWrites = writeSpy.mock.calls.filter(([file]) =>
-      /openspec-apply-change[\\/]SKILL\.md$|opsx[\\/]apply\.md$/.test(String(file))
-    );
-    // The upgrade path and the forced main loop each write skill and command.
-    expect(applyWrites.length).toBeGreaterThanOrEqual(4);
-    for (const [file, content] of applyWrites) {
+    expect(upgradeSpy).toHaveBeenCalledTimes(1);
+    const isApply = (file: unknown) => /openspec-apply-change[\\/]SKILL\.md$|opsx[\\/]apply\.md$/.test(String(file));
+    const byUpgrade = (upgradeWrites ?? []).filter(([file]) => isApply(file));
+    // The upgrade itself wrote the apply skill and command...
+    expect(byUpgrade.map(([file]) => path.basename(String(file))).sort()).toEqual(['SKILL.md', 'apply.md']);
+    for (const [file, content] of byUpgrade) {
+      expectSupersededApply(String(content), `upgrade ${String(file)}`);
+    }
+    // ...and so did the forced main loop afterwards.
+    const all = writeSpy.mock.calls.filter(([file]) => isApply(file));
+    expect(all.length).toBeGreaterThan(byUpgrade.length);
+    for (const [file, content] of all) {
       expectSupersededApply(String(content), String(file));
     }
   });
